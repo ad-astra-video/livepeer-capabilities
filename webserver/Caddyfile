@@ -1,0 +1,31 @@
+:8088 {
+	log {
+		output stdout
+		level debug
+	}
+
+	# API routes go to backend
+	handle /api/* {
+		header {
+			Access-Control-Allow-Origin "*"
+			Access-Control-Allow-Methods "GET, HEAD, POST, PUT, DELETE, OPTIONS"
+			Access-Control-Allow-Headers "*"
+		}
+
+		@options method OPTIONS
+		respond @options 204
+
+		reverse_proxy backend:8000
+	}
+
+	# All other routes go to Vite dev server (hot reload)
+	handle {
+		header {
+			Access-Control-Allow-Origin "*"
+			Access-Control-Allow-Methods "GET, HEAD, POST, OPTIONS"
+			Access-Control-Allow-Headers "*"
+		}
+
+		reverse_proxy webapp:3001
+	}
+}

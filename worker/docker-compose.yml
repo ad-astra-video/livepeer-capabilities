@@ -1,0 +1,89 @@
+services:
+  gateway-transcoding:
+    image: livepeer/go-livepeer:v0.8.10
+    container_name: gateway-transcoding
+    volumes:
+      - ./data/gateway-transcoding:/data
+    ports:
+      - 5937:5937
+      - 2937:2937
+    command: [
+      "-gateway",
+      "-rtmpAddr=gateway-transcoding:1937",
+      "-httpAddr=gateway-transcoding:5937",
+      "-cliAddr=gateway-transcoding:2937",
+      "-httpIngest=true",
+      "-v=9",
+      "-network=arbitrum-one-mainnet",
+      "-blockPollingInterval=10",
+      "-ethUrl=${ARB_ETH_URL}",
+      "-ethPassword=${ETH_PASSWORD}",
+      "-extraNodes=10",
+      "-dataDir=/data",
+      "-monitor"
+    ]
+
+  gateway-ai-batch:
+    image: livepeer/go-livepeer:v0.8.10
+    container_name: gateway-ai-batch
+    volumes:
+      - ./data/gateway-ai-batch:/data
+    ports:
+      - 5938:5938
+      - 2938:2938
+    command: [
+      "-gateway",
+      "-aiServiceRegistry",
+      "-rtmpAddr=gateway-ai-batch:1938",
+      "-httpAddr=gateway-ai-batch:5938",
+      "-cliAddr=gateway-ai-batch:2938",
+      "-httpIngest=true",
+      "-v=9",
+      "-network=arbitrum-one-mainnet",
+      "-blockPollingInterval=10",
+      "-ethUrl=${ARB_ETH_URL}",
+      "-ethPassword=${ETH_PASSWORD}",
+      "-extraNodes=10",
+      "-dataDir=/data",
+      "-monitor"
+    ]
+
+  gateway-ai-lv2v:
+    image: livepeer/go-livepeer:v0.8.10
+    container_name: gateway-ai-lv2v
+    volumes:
+      - ./data/gateway-ai-lv2v:/data
+    ports:
+      - 5939:5939
+      - 2939:2939
+    command: [
+      "-gateway",
+      "-rtmpAddr=gateway-ai-lv2v:1939",
+      "-httpAddr=gateway-ai-lv2v:5939",
+      "-cliAddr=gateway-ai-lv2v:2939",
+      "-orchWebhookUrl=https://livepeer.github.io/livepeer-infra/ai-orchestrators-prod.json",
+      "-httpIngest=true",
+      "-v=9",
+      "-network=arbitrum-one-mainnet",
+      "-blockPollingInterval=10",
+      "-ethUrl=${ARB_ETH_URL}",
+      "-ethPassword=${ETH_PASSWORD}",
+      "-extraNodes=10",
+      "-dataDir=/data",
+      "-monitor"
+    ]
+
+  worker-agent:
+    build: .
+    container_name: worker-agent
+    environment:
+      - MAIN_SERVER_URL=${MAIN_SERVER_URL}
+      - WORKER_API_TOKEN=${WORKER_API_TOKEN}
+      - WORKER_REGION=${WORKER_REGION}
+      - VULTR_INSTANCE_ID=${VULTR_INSTANCE_ID}
+      - POLL_INTERVAL=30
+    depends_on:
+      - gateway-transcoding
+      - gateway-ai-batch
+      - gateway-ai-lv2v
+    restart: unless-stopped

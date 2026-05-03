@@ -1,0 +1,26 @@
+# Dependencies
+webapp/node_modules/
+
+# Build output
+webapp/dist/
+
+# Environment variables
+.env
+
+# Data directories (runtime state, wallets, databases)
+data/admin/
+data/gateway-*/
+data/wallets/*.json
+data/wallets/*.used.json
+!data/wallets/README.md
+!data/wallets/encrypt_wallets.py
+!data/wallets/upload_to_s3.py
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# IDE
+.vscode/
+.idea/
