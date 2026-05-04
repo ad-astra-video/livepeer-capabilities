@@ -40,7 +40,8 @@ class Instance(Base):
     status = Column(String, default="pending")
     wallet_address = Column(String, nullable=True)
     eth_password = Column(String, nullable=True)
-    s3_object_key = Column(String, nullable=True)
+    s3_keystore_key = Column(String, nullable=True)
+    s3_password_key = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     last_seen_at = Column(DateTime, nullable=True)
 

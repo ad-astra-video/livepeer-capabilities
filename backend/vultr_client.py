@@ -36,13 +36,21 @@ class VultrClient:
         data = await self._request("GET", f"{BASE_URL}/instances")
         return data.get("instances", [])
 
-    async def create_instance(self, region: str, label: str, instance_id: str, plan: str = "vc2-1c-1gb", s3_presigned_url: str = "") -> Dict:
+    async def create_instance(
+        self,
+        region: str,
+        label: str,
+        instance_id: str,
+        plan: str = "vc2-1c-1gb",
+        s3_keystore_url: str = "",
+        s3_password_url: str = ""
+    ) -> Dict:
         payload = {
             "region": region,
             "plan": plan,
             "label": label,
             "os_id": 1743,  # Ubuntu 22.04
-            "user_data": self._cloud_init(region, instance_id, s3_presigned_url),
+            "user_data": self._cloud_init(region, instance_id, s3_keystore_url, s3_password_url),
         }
         data = await self._request("POST", f"{BASE_URL}/instances", json=payload)
         return data.get("instance", {})
@@ -50,7 +58,13 @@ class VultrClient:
     async def delete_instance(self, instance_id: str):
         await self._request("DELETE", f"{BASE_URL}/instances/{instance_id}")
 
-    def _cloud_init(self, region: str, instance_id: str, s3_presigned_url: str = "") -> str:
+    def _cloud_init(
+        self,
+        region: str,
+        instance_id: str,
+        s3_keystore_url: str = "",
+        s3_password_url: str = ""
+    ) -> str:
         script_path = os.path.join(os.path.dirname(__file__), "startup.sh")
         with open(script_path, "r") as f:
             script = f.read()
@@ -61,7 +75,8 @@ class VultrClient:
         script = script.replace("{{VULTR_INSTANCE_ID}}", instance_id)
         script = script.replace("{{RUN_DURATION}}", "300")
         script = script.replace("{{ARB_ETH_URL}}", ARB_ETH_URL)
-        script = script.replace("{{S3_PRESIGNED_URL}}", s3_presigned_url)
+        script = script.replace("{{S3_KEYSTORE_URL}}", s3_keystore_url)
+        script = script.replace("{{S3_PASSWORD_URL}}", s3_password_url)
         script = script.replace("${MAX_CYCLES}", "10")
 
         return script

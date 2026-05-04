@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Upload a wallet JSON file to S3 for use by worker instances.
+Upload keystore and password to S3 as separate objects.
 
-Naming convention: the wallet address is read from the JSON and the S3 key
-becomes 'wallets/0x<address>.json'. The backend discovers wallets by listing
-objects under the 'wallets/' prefix.
+Naming convention:
+  Keystore: wallets/keystore/0x<address>.json
+  Password: wallets/password/0x<address>.password
 
 Usage:
     export S3_ENDPOINT=https://ewr1.vultrobjects.com
@@ -12,7 +12,10 @@ Usage:
     export S3_SECRET_KEY=xxx
     export S3_BUCKET=livepeer-wallets
 
+    python upload_to_s3.py my-keystore.json my-password.txt
+    # or
     python upload_to_s3.py my-wallet.json
+    # (if my-wallet.json contains keystore + password fields, splits automatically)
 """
 
 import os
@@ -47,7 +50,21 @@ def get_s3_client():
     )
 
 
-def upload_wallet(fpath: str):
+def upload_object(object_key: str, body: bytes, content_type: str = "application/octet-stream"):
+    client = get_s3_client()
+    client.put_object(
+        Bucket=S3_BUCKET,
+        Key=object_key,
+        Body=body,
+        ContentType=content_type,
+        ServerSideEncryption="AES256",
+        Metadata={"purpose": "livepeer-wallet"}
+    )
+    print(f"  s3://{S3_BUCKET}/{object_key}")
+
+
+def upload_from_combined(fpath: str):
+    """Upload from a combined JSON file containing keystore + password."""
     with open(fpath, "r") as f:
         data = json.load(f)
 
@@ -56,28 +73,60 @@ def upload_wallet(fpath: str):
         print("ERROR: Wallet file missing 'address' field")
         sys.exit(1)
 
-    # Normalize address
     address = address.lower()
-    object_key = f"wallets/{address}.json"
+    password = data.get("password", "")
+    if not password:
+        print("ERROR: Wallet file missing 'password' field")
+        sys.exit(1)
 
-    client = get_s3_client()
-    body = json.dumps(data).encode("utf-8")
+    keystore = data.get("keystore", data)
+    if "crypto" not in keystore:
+        print("ERROR: Wallet file missing keystore 'crypto' field")
+        sys.exit(1)
 
-    client.put_object(
-        Bucket=S3_BUCKET,
-        Key=object_key,
-        Body=body,
-        ContentType="application/json",
-        ServerSideEncryption="AES256",  # S3 server-side encryption at rest
-        Metadata={"address": address}
-    )
-    print(f"Uploaded: s3://{S3_BUCKET}/{object_key}")
-    print(f"Address: {address}")
-    print(f"Encryption: SSE-S3 (AES-256)")
+    print(f"Uploading wallet {address}")
+    keystore_key = f"wallets/keystore/{address}.json"
+    password_key = f"wallets/password/{address}.password"
+
+    upload_object(keystore_key, json.dumps(keystore).encode("utf-8"), "application/json")
+    upload_object(password_key, password.encode("utf-8"), "text/plain")
+    print("Done.")
+
+
+def upload_separate(keystore_path: str, password_path: str):
+    """Upload separate keystore JSON and password files."""
+    with open(keystore_path, "r") as f:
+        keystore = json.load(f)
+
+    address = keystore.get("address", "")
+    if not address:
+        print("ERROR: Keystore file missing 'address' field")
+        sys.exit(1)
+
+    address = address.lower()
+
+    with open(password_path, "r") as f:
+        password = f.read().strip()
+
+    if not password:
+        print("ERROR: Password file is empty")
+        sys.exit(1)
+
+    print(f"Uploading wallet {address}")
+    keystore_key = f"wallets/keystore/{address}.json"
+    password_key = f"wallets/password/{address}.password"
+
+    upload_object(keystore_key, json.dumps(keystore).encode("utf-8"), "application/json")
+    upload_object(password_key, password.encode("utf-8"), "text/plain")
+    print("Done.")
 
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print(__doc__)
         sys.exit(1)
-    upload_wallet(sys.argv[1])
+
+    if len(sys.argv) == 2:
+        upload_from_combined(sys.argv[1])
+    else:
+        upload_separate(sys.argv[1], sys.argv[2])

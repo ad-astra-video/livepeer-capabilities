@@ -1,6 +1,6 @@
 #!/bin/bash
 # Cloud-init startup script for Livepeer worker instances
-# SECURITY: Wallet + password delivered via S3 only. Never in user-data.
+# SECURITY: Keystore + password delivered via separate S3 URLs. Never in user-data.
 # All secrets live in tmpfs (RAM only) — never touches persistent disk.
 
 export MAIN_SERVER_URL="{{MAIN_SERVER_URL}}"
@@ -8,7 +8,8 @@ export WORKER_API_TOKEN="{{WORKER_API_TOKEN}}"
 export WORKER_REGION="{{WORKER_REGION}}"
 export VULTR_INSTANCE_ID="{{VULTR_INSTANCE_ID}}"
 export ARB_ETH_URL="{{ARB_ETH_URL}}"
-export S3_PRESIGNED_URL="{{S3_PRESIGNED_URL}}"
+export S3_KEYSTORE_URL="{{S3_KEYSTORE_URL}}"
+export S3_PASSWORD_URL="{{S3_PASSWORD_URL}}"
 
 # Install dependencies
 apt-get update && apt-get install -y python3 python3-pip python3-venv curl git
@@ -35,35 +36,38 @@ mount -t tmpfs -o size=10M,mode=700 tmpfs /data/gateway-ai-lv2v/keystore
 mkdir -p /run/worker
 mount -t tmpfs -o size=20M,mode=700 tmpfs /run/worker
 
-# Download wallet from S3 pre-signed URL directly to RAM
-if [ -n "$S3_PRESIGNED_URL" ]; then
-    echo "Downloading wallet from secure storage to RAM..."
-    curl -sfL "$S3_PRESIGNED_URL" -o /data/gateway-transcoding/keystore/wallet.json
-    if [ -f /data/gateway-transcoding/keystore/wallet.json ]; then
-        # Extract keystore from downloaded wallet JSON
-        python3 -c "import sys,json; d=json.load(open('/data/gateway-transcoding/keystore/wallet.json')); json.dump(d.get('keystore',d),sys.stdout)" > /data/gateway-transcoding/keystore/wallet
+# Download keystore and password from separate S3 pre-signed URLs directly to RAM
+if [ -n "$S3_KEYSTORE_URL" ] && [ -n "$S3_PASSWORD_URL" ]; then
+    echo "Downloading keystore from secure storage to RAM..."
+    curl -sfL "$S3_KEYSTORE_URL" -o /data/gateway-transcoding/keystore/wallet
+    if [ -f /data/gateway-transcoding/keystore/wallet ]; then
         cp /data/gateway-transcoding/keystore/wallet /data/gateway-ai-batch/keystore/wallet
         cp /data/gateway-transcoding/keystore/wallet /data/gateway-ai-lv2v/keystore/wallet
         chmod 600 /data/gateway-*/keystore/wallet
+        echo "Keystore installed in RAM successfully"
+    else
+        echo "ERROR: Failed to download keystore from S3"
+    fi
 
-        # Extract password to tmpfs file (never touches persistent disk)
-        python3 -c "import json; d=json.load(open('/data/gateway-transcoding/keystore/wallet.json')); print(d.get('password',''))" > /data/gateway-transcoding/keystore/.password
+    echo "Downloading password from secure storage to RAM..."
+    curl -sfL "$S3_PASSWORD_URL" -o /data/gateway-transcoding/keystore/.password
+    if [ -f /data/gateway-transcoding/keystore/.password ]; then
         cp /data/gateway-transcoding/keystore/.password /data/gateway-ai-batch/keystore/.password
         cp /data/gateway-transcoding/keystore/.password /data/gateway-ai-lv2v/keystore/.password
         chmod 600 /data/gateway-*/keystore/.password
+        echo "Password installed in RAM successfully"
+    else
+        echo "ERROR: Failed to download password from S3"
+    fi
 
-        rm -f /data/gateway-transcoding/keystore/wallet.json
-        echo "Wallet + password installed in RAM (tmpfs) successfully"
-
-        # Notify backend that wallet was downloaded (so it can delete S3 object early)
+    # Notify backend that wallet was downloaded (so it can delete S3 objects early)
+    if [ -f /data/gateway-transcoding/keystore/wallet ] && [ -f /data/gateway-transcoding/keystore/.password ]; then
         curl -sf -X POST "$MAIN_SERVER_URL/api/instances/$VULTR_INSTANCE_ID/wallet-downloaded" \
             -H "Content-Type: application/json" \
             -d "{\"worker_token\":\"$WORKER_API_TOKEN\"}" || true
-    else
-        echo "ERROR: Failed to download wallet from S3"
     fi
 else
-    echo "WARNING: No S3_PRESIGNED_URL provided, skipping wallet download"
+    echo "WARNING: S3_KEYSTORE_URL or S3_PASSWORD_URL not provided, skipping wallet download"
 fi
 
 # Setup worker directory in RAM
@@ -195,7 +199,7 @@ while True:
              fi"
 WORKEREOF
 
-# Create .env file for docker-compose (NO ETH_PASSWORD — non-sensitive only)
+# Create .env file for docker-compose (NO wallet secrets — non-sensitive only)
 cat > .env << ENVEOF
 ARB_ETH_URL=${ARB_ETH_URL}
 MAIN_SERVER_URL=${MAIN_SERVER_URL}
@@ -208,4 +212,4 @@ ENVEOF
 docker compose up -d
 
 # Mark startup complete
-echo "Worker startup complete — wallet + password stored in RAM (tmpfs) only"
+echo "Worker startup complete — keystore + password stored in RAM (tmpfs) only"

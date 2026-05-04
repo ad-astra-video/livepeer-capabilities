@@ -125,7 +125,8 @@ async def create_instance(req: dict, db: Session = Depends(get_db), user: User =
 
         vultr_instance = await vultr.create_instance(
             region_id, label, instance_uuid,
-            s3_presigned_url=prepared.get("s3_presigned_url", "")
+            s3_keystore_url=prepared.get("s3_keystore_url", ""),
+            s3_password_url=prepared.get("s3_password_url", "")
         )
         instance = Instance(
             vultr_instance_id=vultr_instance.get("id"),
@@ -134,7 +135,8 @@ async def create_instance(req: dict, db: Session = Depends(get_db), user: User =
             ip_address=vultr_instance.get("main_ip", ""),
             status=vultr_instance.get("status", "pending"),
             wallet_address=prepared["address"],
-            s3_object_key=prepared.get("s3_object_key")
+            s3_keystore_key=prepared.get("s3_keystore_key"),
+            s3_password_key=prepared.get("s3_password_key")
         )
         db.add(instance)
 
@@ -150,14 +152,20 @@ async def create_instance(req: dict, db: Session = Depends(get_db), user: User =
     except VultrAPIError as e:
         if wallet_source:
             release_wallet(wallet_source)
-        if wallet and wallet.get("s3_object_key"):
-            cleanup_s3_wallet(wallet["s3_object_key"])
+        if wallet:
+            cleanup_s3_wallet(
+                wallet.get("s3_keystore_key"),
+                wallet.get("s3_password_key")
+            )
         raise HTTPException(status_code=429, detail=str(e))
     except Exception as e:
         if wallet_source:
             release_wallet(wallet_source)
-        if wallet and wallet.get("s3_object_key"):
-            cleanup_s3_wallet(wallet["s3_object_key"])
+        if wallet:
+            cleanup_s3_wallet(
+                wallet.get("s3_keystore_key"),
+                wallet.get("s3_password_key")
+            )
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.delete("/api/instances/{instance_id}")
@@ -173,8 +181,7 @@ async def delete_instance(instance_id: str, db: Session = Depends(get_db), user:
         await vultr.delete_instance(instance_id)
     except Exception:
         pass
-    if instance.s3_object_key:
-        cleanup_s3_wallet(instance.s3_object_key)
+    cleanup_s3_wallet(instance.s3_keystore_key, instance.s3_password_key)
     db.delete(instance)
     db.commit()
     return {"ok": True}
@@ -185,9 +192,10 @@ def wallet_downloaded(instance_id: str, req: dict, db: Session = Depends(get_db)
     if req.get("worker_token") != WORKER_TOKEN:
         raise HTTPException(status_code=401, detail="Invalid worker token")
     instance = db.query(Instance).filter(Instance.vultr_instance_id == instance_id).first()
-    if instance and instance.s3_object_key:
-        cleanup_s3_wallet(instance.s3_object_key)
-        instance.s3_object_key = None
+    if instance:
+        cleanup_s3_wallet(instance.s3_keystore_key, instance.s3_password_key)
+        instance.s3_keystore_key = None
+        instance.s3_password_key = None
         db.commit()
     return {"ok": True}
 
@@ -335,7 +343,8 @@ async def spawn_region_workers():
 
                 vultr_instance = await vultr.create_instance(
                     region.vultr_region_id, label, instance_uuid,
-                    s3_presigned_url=prepared.get("s3_presigned_url", "")
+                    s3_keystore_url=prepared.get("s3_keystore_url", ""),
+                    s3_password_url=prepared.get("s3_password_url", "")
                 )
                 instance = Instance(
                     vultr_instance_id=vultr_instance.get("id"),
@@ -344,7 +353,8 @@ async def spawn_region_workers():
                     ip_address=vultr_instance.get("main_ip", ""),
                     status="pending",
                     wallet_address=prepared["address"],
-                    s3_object_key=prepared.get("s3_object_key")
+                    s3_keystore_key=prepared.get("s3_keystore_key"),
+                    s3_password_key=prepared.get("s3_password_key")
                 )
                 db.add(instance)
                 job = JobRun(
@@ -358,15 +368,21 @@ async def spawn_region_workers():
                 print(f"Vultr API error spawning in {region.vultr_region_id}: {e}")
                 if wallet_source:
                     release_wallet(wallet_source)
-                if wallet and wallet.get("s3_object_key"):
-                    cleanup_s3_wallet(wallet["s3_object_key"])
+                if wallet:
+                    cleanup_s3_wallet(
+                        wallet.get("s3_keystore_key"),
+                        wallet.get("s3_password_key")
+                    )
                 db.rollback()
             except Exception as e:
                 print(f"Failed to spawn worker in {region.vultr_region_id}: {e}")
                 if wallet_source:
                     release_wallet(wallet_source)
-                if wallet and wallet.get("s3_object_key"):
-                    cleanup_s3_wallet(wallet["s3_object_key"])
+                if wallet:
+                    cleanup_s3_wallet(
+                        wallet.get("s3_keystore_key"),
+                        wallet.get("s3_password_key")
+                    )
                 db.rollback()
     finally:
         db.close()
