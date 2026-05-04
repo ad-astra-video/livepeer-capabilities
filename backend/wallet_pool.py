@@ -2,65 +2,85 @@ import os
 import re
 from typing import Optional, Dict, Any
 
-from s3_wallet_store import (
-    list_objects, generate_presigned_url, delete_object, is_configured
-)
+from s3_wallet_store import generate_presigned_url, delete_object, is_configured
 
+WALLET_POOL_DIR = os.environ.get("WALLET_POOL_DIR", "/data/wallets")
 KEYSTORE_PREFIX = "wallets/keystore/"
 PASSWORD_PREFIX = "wallets/password/"
 
 
-def _parse_address_from_key(object_key: str) -> Optional[str]:
-    """Extract Ethereum address from S3 object key like 'wallets/keystore/0xABC...json'."""
-    filename = os.path.basename(object_key)
-    name = filename.replace(".json", "")
+def _ensure_pool_dir():
+    os.makedirs(WALLET_POOL_DIR, exist_ok=True)
+
+
+def _parse_address_from_filename(fname: str) -> Optional[str]:
+    """Extract Ethereum address from filename like '0xABC...json'."""
+    name = fname.replace(".json", "").replace(".used", "")
     if re.match(r"^0x[a-fA-F0-9]{40}$", name):
         return name.lower()
     return None
 
 
+def _keystore_key_for_address(address: str) -> str:
+    return f"{KEYSTORE_PREFIX}{address.lower()}.json"
+
+
 def _password_key_for_address(address: str) -> str:
-    """Compute the S3 object key for the password file given an address."""
     return f"{PASSWORD_PREFIX}{address.lower()}.password"
 
 
 def list_available_wallets() -> list:
-    """Return list of available keystore object keys from S3."""
-    if not is_configured():
-        return []
-    return list_objects(prefix=KEYSTORE_PREFIX)
+    """Return list of available wallet marker files from local pool."""
+    _ensure_pool_dir()
+    wallets = []
+    for fname in sorted(os.listdir(WALLET_POOL_DIR)):
+        if fname.endswith(".json") and not fname.endswith(".used.json"):
+            fpath = os.path.join(WALLET_POOL_DIR, fname)
+            wallets.append(fpath)
+    return wallets
 
 
 def acquire_wallet() -> Optional[Dict[str, Any]]:
-    """Pick an available wallet from S3 pool. Returns None if pool empty."""
+    """Pick an available wallet marker and mark it used. Returns None if pool empty."""
     available = list_available_wallets()
-    for keystore_key in available:
-        address = _parse_address_from_key(keystore_key)
+    for fpath in available:
+        fname = os.path.basename(fpath)
+        address = _parse_address_from_filename(fname)
         if address:
-            password_key = _password_key_for_address(address)
-            return {
-                "address": address,
-                "s3_keystore_key": keystore_key,
-                "s3_password_key": password_key,
-                "source_path": None
-            }
+            # Mark as used by renaming
+            used_path = fpath.replace(".json", ".used.json")
+            try:
+                os.rename(fpath, used_path)
+                return {
+                    "address": address,
+                    "source_path": used_path,
+                    "s3_keystore_key": _keystore_key_for_address(address),
+                    "s3_password_key": _password_key_for_address(address),
+                }
+            except Exception:
+                continue
     return None
 
 
 def release_wallet(wallet_source_path: str):
-    """No-op for S3-only pool (cleanup is done via cleanup_s3_wallet)."""
-    pass
+    """Delete the used marker file from pool."""
+    if wallet_source_path and os.path.exists(wallet_source_path):
+        try:
+            os.remove(wallet_source_path)
+        except Exception:
+            pass
 
 
 def get_or_create_wallet() -> Dict[str, Any]:
-    """Get wallet from S3 pool. Raises if pool is empty."""
+    """Get wallet from pool. Raises if pool is empty (no auto-generation)."""
     wallet = acquire_wallet()
     if wallet:
         return wallet
     raise RuntimeError(
-        "S3 wallet pool is empty. Upload keystore + password files to S3: "
-        f"'{KEYSTORE_PREFIX}0x<address>.json' and "
-        f"'{PASSWORD_PREFIX}0x<address>.password'. "
+        "Wallet pool is empty. Create marker files in "
+        f"'{WALLET_POOL_DIR}' named '0x<address>.json' (can be blank). "
+        "Upload keystore to S3 at 'wallets/keystore/0x<address>.json' and "
+        "password to 'wallets/password/0x<address>.password'. "
         "See data/wallets/README.md for setup instructions."
     )
 

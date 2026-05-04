@@ -2,7 +2,12 @@
 """
 Upload keystore and password to S3 as separate objects.
 
-Naming convention:
+This is a standalone convenience tool. The backend discovers wallets by
+looking for marker files in its local pool directory (default: /data/wallets/)
+named '0x<address>.json'. These marker files can be blank — only the filename
+matters.
+
+Naming convention in S3:
   Keystore: wallets/keystore/0x<address>.json
   Password: wallets/password/0x<address>.password
 
@@ -12,15 +17,20 @@ Usage:
     export S3_SECRET_KEY=xxx
     export S3_BUCKET=livepeer-wallets
 
+    # Upload keystore + password, create local marker file
+    python upload_to_s3.py my-keystore.json my-password.txt --marker /data/wallets/
+
+    # Upload keystore + password only (no marker)
     python upload_to_s3.py my-keystore.json my-password.txt
-    # or
-    python upload_to_s3.py my-wallet.json
-    # (if my-wallet.json contains keystore + password fields, splits automatically)
+
+    # Upload from a combined JSON (splits automatically)
+    python upload_to_s3.py my-wallet.json --marker /data/wallets/
 """
 
 import os
 import sys
 import json
+import argparse
 
 try:
     import boto3
@@ -63,7 +73,19 @@ def upload_object(object_key: str, body: bytes, content_type: str = "application
     print(f"  s3://{S3_BUCKET}/{object_key}")
 
 
-def upload_from_combined(fpath: str):
+def create_marker(address: str, marker_dir: str):
+    """Create a blank marker file named 0x<address>.json in the pool directory."""
+    os.makedirs(marker_dir, exist_ok=True)
+    fpath = os.path.join(marker_dir, f"{address.lower()}.json")
+    if os.path.exists(fpath):
+        print(f"  Marker already exists: {fpath}")
+    else:
+        with open(fpath, "w") as f:
+            pass  # blank file
+        print(f"  Created marker: {fpath}")
+
+
+def upload_from_combined(fpath: str, marker_dir: str = None):
     """Upload from a combined JSON file containing keystore + password."""
     with open(fpath, "r") as f:
         data = json.load(f)
@@ -90,10 +112,14 @@ def upload_from_combined(fpath: str):
 
     upload_object(keystore_key, json.dumps(keystore).encode("utf-8"), "application/json")
     upload_object(password_key, password.encode("utf-8"), "text/plain")
+
+    if marker_dir:
+        create_marker(address, marker_dir)
+
     print("Done.")
 
 
-def upload_separate(keystore_path: str, password_path: str):
+def upload_separate(keystore_path: str, password_path: str, marker_dir: str = None):
     """Upload separate keystore JSON and password files."""
     with open(keystore_path, "r") as f:
         keystore = json.load(f)
@@ -118,15 +144,23 @@ def upload_separate(keystore_path: str, password_path: str):
 
     upload_object(keystore_key, json.dumps(keystore).encode("utf-8"), "application/json")
     upload_object(password_key, password.encode("utf-8"), "text/plain")
+
+    if marker_dir:
+        create_marker(address, marker_dir)
+
     print("Done.")
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print(__doc__)
-        sys.exit(1)
+    parser = argparse.ArgumentParser(description="Upload wallet keystore and password to S3")
+    parser.add_argument("files", nargs="+", help="Combined JSON, or keystore + password files")
+    parser.add_argument("--marker", "-m", help="Directory to create blank marker file (e.g., /data/wallets/)")
+    args = parser.parse_args()
 
-    if len(sys.argv) == 2:
-        upload_from_combined(sys.argv[1])
+    if len(args.files) == 1:
+        upload_from_combined(args.files[0], args.marker)
+    elif len(args.files) == 2:
+        upload_separate(args.files[0], args.files[1], args.marker)
     else:
-        upload_separate(sys.argv[1], sys.argv[2])
+        parser.print_help()
+        sys.exit(1)
