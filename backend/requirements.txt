@@ -5,6 +5,4 @@ bcrypt==4.1.2
 PyJWT==2.8.0
 httpx==0.25.2
 apscheduler==3.10.4
-eth-account>=0.11.0
 boto3>=1.34.0
-cryptography>=42.0.0

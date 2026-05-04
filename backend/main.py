@@ -175,18 +175,6 @@ async def delete_instance(instance_id: str, db: Session = Depends(get_db), user:
         pass
     if instance.s3_object_key:
         cleanup_s3_wallet(instance.s3_object_key)
-    if instance.wallet_address:
-        from wallet_pool import WALLET_POOL_DIR
-        for fname in os.listdir(WALLET_POOL_DIR):
-            if fname.endswith(".used.json"):
-                try:
-                    with open(os.path.join(WALLET_POOL_DIR, fname)) as f:
-                        data = json.load(f)
-                    if data.get("address") == instance.wallet_address:
-                        os.remove(os.path.join(WALLET_POOL_DIR, fname))
-                        break
-                except Exception:
-                    pass
     db.delete(instance)
     db.commit()
     return {"ok": True}

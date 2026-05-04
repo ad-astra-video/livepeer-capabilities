@@ -2,7 +2,7 @@ import os
 import json
 import uuid
 from datetime import datetime, timedelta
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 try:
     import boto3
@@ -88,6 +88,7 @@ def upload_wallet(wallet_data: Dict[str, Any]) -> str:
         Key=object_key,
         Body=body,
         ContentType="application/json",
+        ServerSideEncryption="AES256",
         Metadata={
             "uploaded": datetime.utcnow().isoformat(),
             "address": wallet_data.get("address", "")
@@ -115,6 +116,28 @@ def delete_object(object_key: str):
         client.delete_object(Bucket=S3_BUCKET, Key=object_key)
     except Exception:
         pass
+
+def list_objects(prefix: str = "") -> List[str]:
+    """List object keys in the bucket under the given prefix."""
+    if not is_configured():
+        return []
+    try:
+        client = _get_s3_client()
+        response = client.list_objects_v2(Bucket=S3_BUCKET, Prefix=prefix)
+        return [obj["Key"] for obj in response.get("Contents", [])]
+    except Exception:
+        return []
+
+def get_object(object_key: str) -> Optional[bytes]:
+    """Download an object from S3 and return its raw bytes."""
+    if not object_key:
+        return None
+    try:
+        client = _get_s3_client()
+        response = client.get_object(Bucket=S3_BUCKET, Key=object_key)
+        return response["Body"].read()
+    except Exception:
+        return None
 
 def is_configured() -> bool:
     """Check if S3 is properly configured."""
