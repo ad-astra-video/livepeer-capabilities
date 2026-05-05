@@ -15,7 +15,7 @@ except ImportError:
 S3_ENDPOINT = os.environ.get("S3_ENDPOINT", "")
 S3_ACCESS_KEY = os.environ.get("S3_ACCESS_KEY", "")
 S3_SECRET_KEY = os.environ.get("S3_SECRET_KEY", "")
-S3_BUCKET = os.environ.get("S3_BUCKET", "livepeer-wallets")
+S3_BUCKET = os.environ.get("S3_BUCKET", "wallets")
 S3_REGION = os.environ.get("S3_REGION", "us-east-1")
 S3_URL_EXPIRY_SECONDS = int(os.environ.get("S3_URL_EXPIRY_SECONDS", "600"))
 S3_OBJECT_TTL_HOURS = int(os.environ.get("S3_OBJECT_TTL_HOURS", "24"))
@@ -31,7 +31,7 @@ def _get_s3_client():
         aws_access_key_id=S3_ACCESS_KEY,
         aws_secret_access_key=S3_SECRET_KEY,
         region_name=S3_REGION,
-        config=Config(signature_version="s3v4")
+        config=Config(signature_version="s3v4", s3={"addressing_style": "path"})
     )
 
 def ensure_bucket():
