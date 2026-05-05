@@ -193,7 +193,7 @@ async def create_instance(req: dict, db: Session = Depends(get_db), user: User =
             region_id=region_id,
             label=label,
             ip_address=vultr_instance.get("main_ip", ""),
-            status=vultr_instance.get("status", "pending"),
+            status="installing",
             wallet_address=prepared["address"],
             s3_keystore_key=prepared.get("s3_keystore_key"),
             s3_password_key=prepared.get("s3_password_key")
@@ -490,7 +490,7 @@ async def spawn_region_workers():
                     region_id=region.vultr_region_id,
                     label=label,
                     ip_address=vultr_instance.get("main_ip", ""),
-                    status="pending",
+                    status="installing",
                     wallet_address=prepared["address"],
                     s3_keystore_key=prepared.get("s3_keystore_key"),
                     s3_password_key=prepared.get("s3_password_key")

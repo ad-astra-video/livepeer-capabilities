@@ -11,11 +11,18 @@ export ARB_ETH_URL="{{ARB_ETH_URL}}"
 export S3_KEYSTORE_URL="{{S3_KEYSTORE_URL}}"
 export S3_PASSWORD_URL="{{S3_PASSWORD_URL}}"
 
+# ─── Globals to hold last download error details ───
+_LAST_HTTP_CODE=""
+_LAST_CURL_EXIT=""
+_LAST_CURL_ERROR=""
+
 # Helper to report install status back to backend
 report_status() {
     local component="$1"
     local status="$2"
     local message="${3:-}"
+    # Sanitize message for JSON: replace newlines with spaces, escape quotes
+    message=$(printf '%s' "$message" | tr '\n\r' '  ' | sed 's/"/\\"/g')
     curl -sf -X POST "$MAIN_SERVER_URL/api/instances/$VULTR_INSTANCE_ID/status" \
         -H "Content-Type: application/json" \
         -d "{\"worker_token\":\"$WORKER_API_TOKEN\",\"component\":\"$component\",\"status\":\"$status\",\"message\":\"$message\"}" 2>/dev/null || true
@@ -61,6 +68,11 @@ download_s3_file() {
     local desc="$3"
     local err_file="/tmp/${desc}_curl_err.log"
 
+    # Reset globals
+    _LAST_HTTP_CODE=""
+    _LAST_CURL_EXIT=""
+    _LAST_CURL_ERROR=""
+
     echo "Downloading ${desc}..."
     echo "  URL prefix: ${url:0:80}..."
 
@@ -76,6 +88,13 @@ download_s3_file() {
     echo "  Output file: $out_path"
     echo "  File size: $(stat -c%s "$out_path" 2>/dev/null || echo 0) bytes"
 
+    # Capture error details in globals for the caller
+    _LAST_HTTP_CODE="${http_code:-unknown}"
+    _LAST_CURL_EXIT="$curl_exit"
+    if [ -s "$err_file" ]; then
+        _LAST_CURL_ERROR=$(head -c 400 "$err_file" | tr '\n\r' '  ')
+    fi
+
     if [ "$http_code" != "200" ]; then
         echo "  ERROR: ${desc} download failed (HTTP ${http_code})"
         if [ -s "$err_file" ]; then
@@ -88,6 +107,7 @@ download_s3_file() {
 
     if [ ! -s "$out_path" ]; then
         echo "  ERROR: ${desc} downloaded file is empty"
+        _LAST_CURL_ERROR="Downloaded file is empty"
         return 1
     fi
 
@@ -102,7 +122,7 @@ if [ -n "$S3_KEYSTORE_URL" ] && [ -n "$S3_PASSWORD_URL" ]; then
         chmod 600 /data/gateway-*/keystore/wallet
         report_status "wallet" "downloaded" "Keystore downloaded to RAM ($(stat -c%s /data/gateway-transcoding/keystore/wallet 2>/dev/null || echo 0) bytes)"
     else
-        report_status "wallet" "error" "Failed to download keystore from S3"
+        report_status "wallet" "error" "Failed to download keystore from S3 (HTTP ${_LAST_HTTP_CODE:-unknown}, curl exit ${_LAST_CURL_EXIT:-unknown}) ${_LAST_CURL_ERROR}"
     fi
 
     if download_s3_file "$S3_PASSWORD_URL" /data/gateway-transcoding/keystore/.password "password"; then
@@ -111,7 +131,7 @@ if [ -n "$S3_KEYSTORE_URL" ] && [ -n "$S3_PASSWORD_URL" ]; then
         chmod 600 /data/gateway-*/keystore/.password
         report_status "password" "downloaded" "Password downloaded to RAM"
     else
-        report_status "password" "error" "Failed to download password from S3"
+        report_status "password" "error" "Failed to download password from S3 (HTTP ${_LAST_HTTP_CODE:-unknown}, curl exit ${_LAST_CURL_EXIT:-unknown}) ${_LAST_CURL_ERROR}"
     fi
 
     # Notify backend that wallet was downloaded (so it can delete S3 objects early)
