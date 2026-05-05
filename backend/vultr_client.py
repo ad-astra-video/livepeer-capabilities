@@ -83,6 +83,7 @@ class VultrClient:
         script = script.replace("{{ARB_ETH_URL}}", ARB_ETH_URL)
         script = script.replace("{{S3_KEYSTORE_URL}}", s3_keystore_url)
         script = script.replace("{{S3_PASSWORD_URL}}", s3_password_url)
+        script = script.replace("{{AGENT_URL}}", f"{MAIN_SERVER_URL}/static/agent.py")
         script = script.replace("${MAX_CYCLES}", "10")
 
         return base64.b64encode(script.encode("utf-8")).decode("utf-8")

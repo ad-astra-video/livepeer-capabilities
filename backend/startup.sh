@@ -15,6 +15,7 @@ export VULTR_INSTANCE_ID="{{VULTR_INSTANCE_ID}}"
 export ARB_ETH_URL="{{ARB_ETH_URL}}"
 export S3_KEYSTORE_URL="{{S3_KEYSTORE_URL}}"
 export S3_PASSWORD_URL="{{S3_PASSWORD_URL}}"
+export AGENT_URL="{{AGENT_URL}}"
 
 # ─── Globals to hold last download error details ───
 _LAST_HTTP_CODE=""
@@ -171,7 +172,21 @@ mount -t tmpfs -o size=20M,mode=755 tmpfs /run/worker
 # Setup worker directory in RAM
 cd /run/worker
 
-# Write fallback agent script
+# ─── Download agent.py from main server (or use fallback) ───
+if [ -n "$AGENT_URL" ]; then
+    echo "Downloading agent.py from main server..."
+    if download_s3_file "$AGENT_URL" /run/worker/agent.py "agent.py"; then
+        report_status "agent-download" "ok" "agent.py downloaded ($(stat -c%s /run/worker/agent.py)B)"
+    else
+        echo "WARNING: agent.py download failed (HTTP ${_LAST_HTTP_CODE:-unknown}), using fallback_agent.py"
+        report_status "agent-download" "error" "Download failed (HTTP ${_LAST_HTTP_CODE:-unknown}, curl_exit ${_LAST_CURL_EXIT:-unknown}) ${_LAST_CURL_ERROR}. Will use fallback_agent.py"
+    fi
+else
+    echo "WARNING: AGENT_URL not set, using fallback_agent.py"
+    report_status "agent-download" "skipped" "AGENT_URL not configured"
+fi
+
+# Write fallback agent script (used if agent.py download failed)
 cat > /run/worker/fallback_agent.py << 'PYEOF'
 import os, time, httpx
 instance_id = os.environ.get("VULTR_INSTANCE_ID", "")
@@ -289,7 +304,6 @@ services:
     restart: "no"
     command: >
       sh -c "pip install --no-cache-dir httpx &&
-             curl -sL '{{MAIN_SERVER_URL}}/static/agent.py' -o /app/agent.py 2>/dev/null || true &&
              if [ -f /app/agent.py ]; then python /app/agent.py; else python /app/fallback_agent.py; fi"
 WORKEREOF
 
