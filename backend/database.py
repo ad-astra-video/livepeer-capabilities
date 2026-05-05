@@ -65,6 +65,16 @@ class JobRun(Base):
     completed_at = Column(DateTime, nullable=True)
     orch_count = Column(Integer, nullable=True)
 
+
+class InstanceStatus(Base):
+    __tablename__ = "instance_status"
+    id = Column(Integer, primary_key=True, index=True)
+    instance_id = Column(String, index=True)
+    component = Column(String)
+    status = Column(String)
+    message = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
 Base.metadata.create_all(bind=engine)
 
 def get_db():

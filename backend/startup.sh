@@ -11,12 +11,26 @@ export ARB_ETH_URL="{{ARB_ETH_URL}}"
 export S3_KEYSTORE_URL="{{S3_KEYSTORE_URL}}"
 export S3_PASSWORD_URL="{{S3_PASSWORD_URL}}"
 
+# Helper to report install status back to backend
+report_status() {
+    local component="$1"
+    local status="$2"
+    local message="${3:-}"
+    curl -sf -X POST "$MAIN_SERVER_URL/api/instances/$VULTR_INSTANCE_ID/status" \
+        -H "Content-Type: application/json" \
+        -d "{\"worker_token\":\"$WORKER_API_TOKEN\",\"component\":\"$component\",\"status\":\"$status\",\"message\":\"$message\"}" 2>/dev/null || true
+}
+
+report_status "startup" "started" "Cloud-init began"
+
 # Install dependencies
 apt-get update && apt-get install -y python3 python3-pip python3-venv curl git
+report_status "apt" "ok" "Dependencies installed"
 
 # Install Docker
 curl -fsSL https://get.docker.com | sh
 usermod -aG docker ubuntu || true
+report_status "docker" "ok" "Docker installed"
 
 # Create persistent data directories (for gateway state, NOT wallet)
 mkdir -p /data/gateway-transcoding
@@ -31,6 +45,7 @@ mkdir -p /data/gateway-ai-lv2v/keystore
 mount -t tmpfs -o size=10M,mode=700 tmpfs /data/gateway-transcoding/keystore
 mount -t tmpfs -o size=10M,mode=700 tmpfs /data/gateway-ai-batch/keystore
 mount -t tmpfs -o size=10M,mode=700 tmpfs /data/gateway-ai-lv2v/keystore
+report_status "tmpfs" "ok" "RAM-only keystore mounts created"
 
 # Create RAM-only workspace for runtime files (docker-compose, .env)
 mkdir -p /run/worker
@@ -45,8 +60,10 @@ if [ -n "$S3_KEYSTORE_URL" ] && [ -n "$S3_PASSWORD_URL" ]; then
         cp /data/gateway-transcoding/keystore/wallet /data/gateway-ai-lv2v/keystore/wallet
         chmod 600 /data/gateway-*/keystore/wallet
         echo "Keystore installed in RAM successfully"
+        report_status "wallet" "downloaded" "Keystore downloaded to RAM"
     else
         echo "ERROR: Failed to download keystore from S3"
+        report_status "wallet" "error" "Failed to download keystore"
     fi
 
     echo "Downloading password from secure storage to RAM..."
@@ -56,8 +73,10 @@ if [ -n "$S3_KEYSTORE_URL" ] && [ -n "$S3_PASSWORD_URL" ]; then
         cp /data/gateway-transcoding/keystore/.password /data/gateway-ai-lv2v/keystore/.password
         chmod 600 /data/gateway-*/keystore/.password
         echo "Password installed in RAM successfully"
+        report_status "password" "downloaded" "Password downloaded to RAM"
     else
         echo "ERROR: Failed to download password from S3"
+        report_status "password" "error" "Failed to download password"
     fi
 
     # Notify backend that wallet was downloaded (so it can delete S3 objects early)
@@ -68,13 +87,15 @@ if [ -n "$S3_KEYSTORE_URL" ] && [ -n "$S3_PASSWORD_URL" ]; then
     fi
 else
     echo "WARNING: S3_KEYSTORE_URL or S3_PASSWORD_URL not provided, skipping wallet download"
+    report_status "wallet" "skipped" "No S3 URLs provided"
 fi
 
 # Setup worker directory in RAM
 cd /run/worker
 
-# Create docker-compose.yml with tmpfs mounts for keystore
+# Create docker-compose.yml
 # NOTE: No wallet secrets in this file. Password is read from tmpfs at runtime.
+# NOTE: Host tmpfs at /data/gateway-*/keystore is bind-mounted through; no container tmpfs needed.
 cat > docker-compose.yml << 'WORKEREOF'
 services:
   gateway-transcoding:
@@ -82,8 +103,6 @@ services:
     container_name: gateway-transcoding
     volumes:
       - /data/gateway-transcoding:/data
-    tmpfs:
-      - /data/keystore:size=10M,mode=700
     ports:
       - 5937:5937
       - 2937:2937
@@ -109,8 +128,6 @@ services:
     container_name: gateway-ai-batch
     volumes:
       - /data/gateway-ai-batch:/data
-    tmpfs:
-      - /data/keystore:size=10M,mode=700
     ports:
       - 5938:5938
       - 2938:2938
@@ -137,8 +154,6 @@ services:
     container_name: gateway-ai-lv2v
     volumes:
       - /data/gateway-ai-lv2v:/data
-    tmpfs:
-      - /data/keystore:size=10M,mode=700
     ports:
       - 5939:5939
       - 2939:2939
@@ -174,7 +189,7 @@ services:
       - gateway-transcoding
       - gateway-ai-batch
       - gateway-ai-lv2v
-    restart: unless-stopped
+    restart: "no"
     command: >
       sh -c "pip install httpx &&
              curl -sL '{{MAIN_SERVER_URL}}/static/agent.py' -o agent.py 2>/dev/null || true &&
@@ -210,6 +225,8 @@ ENVEOF
 
 # Start worker stack
 docker compose up -d
+report_status "compose" "started" "Docker compose stack started"
 
 # Mark startup complete
+report_status "startup" "complete" "Cloud-init finished, worker running"
 echo "Worker startup complete — keystore + password stored in RAM (tmpfs) only"

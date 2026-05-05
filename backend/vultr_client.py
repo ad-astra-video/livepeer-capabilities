@@ -42,7 +42,7 @@ class VultrClient:
         region: str,
         label: str,
         instance_id: str,
-        plan: str = "vc2-1c-1gb",
+        plan: str = "vc2-4c-8gb",
         s3_keystore_url: str = "",
         s3_password_url: str = ""
     ) -> Dict:

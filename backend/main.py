@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 
-from database import get_db, User, Region, Instance, CapabilityData, JobRun, SessionLocal
+from database import get_db, User, Region, Instance, CapabilityData, JobRun, SessionLocal, InstanceStatus
 from auth import (
     get_current_user, init_admin_user, hash_password,
     verify_password, create_token, decode_token
@@ -249,6 +249,46 @@ def wallet_downloaded(instance_id: str, req: dict, db: Session = Depends(get_db)
         instance.s3_password_key = None
         db.commit()
     return {"ok": True}
+
+
+@app.post("/api/instances/{instance_id}/status")
+def update_instance_status(instance_id: str, req: dict, db: Session = Depends(get_db)):
+    """Receive status updates from worker instances during install/runtime."""
+    if req.get("worker_token") != WORKER_TOKEN:
+        raise HTTPException(status_code=401, detail="Invalid worker token")
+    status = InstanceStatus(
+        instance_id=instance_id,
+        component=req.get("component", "unknown"),
+        status=req.get("status", "unknown"),
+        message=req.get("message")
+    )
+    db.add(status)
+    # Also update instance last_seen_at
+    instance = db.query(Instance).filter(Instance.vultr_instance_id == instance_id).first()
+    if instance:
+        instance.last_seen_at = datetime.utcnow()
+    db.commit()
+    return {"ok": True}
+
+@app.get("/api/instances/{instance_id}/status")
+def get_instance_status(instance_id: str, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """Get all status updates for an instance, newest first."""
+    instance = db.query(Instance).filter(Instance.vultr_instance_id == instance_id).first()
+    if not instance:
+        raise HTTPException(status_code=404, detail="Instance not found")
+    statuses = db.query(InstanceStatus).filter(InstanceStatus.instance_id == instance_id).order_by(InstanceStatus.created_at.desc()).all()
+    return {
+        "instance_id": instance_id,
+        "statuses": [
+            {
+                "component": s.component,
+                "status": s.status,
+                "message": s.message,
+                "created_at": s.created_at.isoformat() if s.created_at else None
+            }
+            for s in statuses
+        ]
+    }
 
 @app.post("/api/instances/sync")
 async def sync_instances(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
