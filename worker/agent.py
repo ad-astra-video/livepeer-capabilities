@@ -28,24 +28,42 @@ def report_status(component, status, message=""):
             "status": status,
             "message": message
         }
-        httpx.post(
+        log(f"  -> REPORT [{component}] status={status} msg={message}")
+        resp = httpx.post(
             f"{MAIN_SERVER_URL}/api/instances/{INSTANCE_ID}/status",
             json=payload,
             timeout=10
         )
+        log(f"  -> REPORT OK: HTTP {resp.status_code}")
     except Exception as e:
-        log(f"Failed to report status: {e}")
+        log(f"  -> REPORT FAILED: {e}")
 
 def fetch_capabilities(gateway):
+    name = gateway["name"]
+    url = gateway["url"]
+    log(f"  [FETCH] Polling {name} at {url}")
     try:
-        resp = httpx.get(gateway["url"], timeout=30)
+        resp = httpx.get(url, timeout=30)
+        log(f"  [FETCH] {name} responded HTTP {resp.status_code}")
         resp.raise_for_status()
-        return resp.json()
+        data = resp.json()
+        log(f"  [FETCH] {name} capabilities received: {json.dumps(data)[:200]}")
+        return data
+    except httpx.HTTPStatusError as e:
+        log(f"  [FETCH] {name} HTTP error: {e.response.status_code} {e.response.text[:100]}")
+        return None
+    except httpx.ConnectError as e:
+        log(f"  [FETCH] {name} connection refused: {e}")
+        return None
+    except httpx.TimeoutException as e:
+        log(f"  [FETCH] {name} timed out after 30s")
+        return None
     except Exception as e:
-        log(f"Error fetching {gateway['name']}: {e}")
+        log(f"  [FETCH] {name} unexpected error: {e}")
         return None
 
 def submit_capabilities(gateway_type, data):
+    log(f"  [SUBMIT] Posting {gateway_type} capabilities to {MAIN_SERVER_URL}/api/capabilities")
     try:
         payload = {
             "worker_token": WORKER_API_TOKEN,
@@ -55,14 +73,18 @@ def submit_capabilities(gateway_type, data):
             "data": data
         }
         resp = httpx.post(f"{MAIN_SERVER_URL}/api/capabilities", json=payload, timeout=30)
+        log(f"  [SUBMIT] {gateway_type} HTTP {resp.status_code}: {resp.text[:150]}")
         resp.raise_for_status()
-        log(f"Submitted {gateway_type} capabilities")
         return True
+    except httpx.HTTPStatusError as e:
+        log(f"  [SUBMIT] {gateway_type} HTTP error: {e.response.status_code} {e.response.text[:100]}")
+        return False
     except Exception as e:
-        log(f"Error submitting {gateway_type}: {e}")
+        log(f"  [SUBMIT] {gateway_type} failed: {e}")
         return False
 
 def mark_complete():
+    log(f"  [COMPLETE] Calling {MAIN_SERVER_URL}/api/instances/{INSTANCE_ID}/complete")
     try:
         payload = {"worker_token": WORKER_API_TOKEN}
         resp = httpx.post(
@@ -70,29 +92,40 @@ def mark_complete():
             json=payload,
             timeout=10
         )
+        log(f"  [COMPLETE] HTTP {resp.status_code}: {resp.text[:150]}")
         resp.raise_for_status()
-        log("Marked instance as complete")
         report_status("agent", "complete", "All gateways reported data, agent exiting")
         return True
     except Exception as e:
-        log(f"Error marking complete: {e}")
+        log(f"  [COMPLETE] failed: {e}")
         return False
 
 def run_once(gateways_done):
-    for gw in GATEWAYS:
-        if gw["name"] in gateways_done:
-            continue
+    pending = [gw for gw in GATEWAYS if gw["name"] not in gateways_done]
+    log(f"  [LOOP] {len(pending)} gateway(s) remaining: {', '.join(g['name'] for g in pending)}")
+    for gw in pending:
         data = fetch_capabilities(gw)
         if data:
-            submit_capabilities(gw["name"], data)
-            gateways_done.add(gw["name"])
-            report_status(f"gateway-{gw['name']}", "ok", "Capabilities fetched and submitted")
+            ok = submit_capabilities(gw["name"], data)
+            if ok:
+                gateways_done.add(gw["name"])
+                report_status(f"gateway-{gw['name']}", "ok", "Capabilities fetched and submitted")
+            else:
+                log(f"  [WARN] {gw['name']} fetch succeeded but submit failed — will retry next cycle")
         else:
             report_status(f"gateway-{gw['name']}", "pending", "Waiting for gateway to respond")
 
 def main():
-    log(f"Worker agent started - region: {WORKER_REGION}, instance: {INSTANCE_ID}")
-    log(f"Main server: {MAIN_SERVER_URL}")
+    log("=" * 60)
+    log("Worker agent starting")
+    log("=" * 60)
+    log(f"  INSTANCE_ID  = {INSTANCE_ID}")
+    log(f"  WORKER_REGION = {WORKER_REGION}")
+    log(f"  MAIN_SERVER  = {MAIN_SERVER_URL}")
+    log(f"  POLL_INTERVAL = {POLL_INTERVAL}s")
+    log(f"  GATEWAYS     = {len(GATEWAYS)} (transcoding, ai-batch, ai-lv2v)")
+    log("=" * 60)
+
     report_status("agent", "started", "Worker agent began polling")
 
     gateways_done = set()
@@ -100,19 +133,26 @@ def main():
     attempt = 0
 
     while attempt < max_attempts:
+        attempt += 1
+        remaining_time = (max_attempts - attempt + 1) * POLL_INTERVAL
+        log(f"--- Attempt {attempt}/{max_attempts} (est {remaining_time}s remaining) ---")
         run_once(gateways_done)
 
         if len(gateways_done) == len(GATEWAYS):
-            log("All gateways have returned data — marking complete and exiting")
+            log(f"SUCCESS: All {len(GATEWAYS)} gateways completed after {attempt} attempts")
             mark_complete()
+            log("Agent exiting cleanly")
             sys.exit(0)
 
-        log(f"Progress: {len(gateways_done)}/{len(GATEWAYS)} gateways done")
-        attempt += 1
+        done = len(gateways_done)
+        log(f"  Progress: {done}/{len(GATEWAYS)} gateways done, sleeping {POLL_INTERVAL}s...")
         time.sleep(POLL_INTERVAL)
 
-    log("Max attempts reached — exiting without completion")
-    report_status("agent", "timeout", "Max polling attempts reached, not all gateways responded")
+    log("TIMEOUT: Max attempts reached without completing all gateways")
+    log(f"  Completed: {', '.join(sorted(gateways_done)) or 'none'}")
+    log(f"  Missing:   {', '.join(sorted(gw['name'] for gw in GATEWAYS if gw['name'] not in gateways_done))}")
+    report_status("agent", "timeout", "Max polling attempts reached")
+    log("Agent exiting with error code 1")
     sys.exit(1)
 
 if __name__ == "__main__":
