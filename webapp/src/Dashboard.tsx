@@ -327,15 +327,6 @@ export default function Dashboard() {
     return map;
   }, [gatewayData]);
 
-  // Label for a region: e.g. "SEWS Atlanta, US" or just "SEWS"
-  const regionLabel = (code: string) => {
-    const d = allRegionDetails[code];
-    const parts = [code.toUpperCase()];
-    if (d?.city) parts.push(d.city);
-    if (d?.country) parts.push(d.country);
-    return parts.join(" ");
-  };
-
   const activeGateway = gatewayData[activeTab];
   const orchs = activeGateway?.orchestrators || [];
 
