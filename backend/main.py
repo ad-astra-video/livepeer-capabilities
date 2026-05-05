@@ -614,7 +614,7 @@ def spawn_job():
     import asyncio
     asyncio.run(spawn_region_workers())
 
-scheduler.add_job(spawn_job, 'interval', minutes=15, id='spawn_workers', replace_existing=True)
+scheduler.add_job(spawn_job, 'interval', minutes=30, id='spawn_workers', replace_existing=True)
 scheduler.start()
 
 @app.get("/api/jobs")
