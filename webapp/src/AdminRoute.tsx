@@ -36,50 +36,39 @@ interface JobRun {
 }
 
 export default function AdminRoute() {
-  const [token, setToken] = useState<string | null>(localStorage.getItem('lp_token'));
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
 
-  const validateToken = useCallback(async (t: string) => {
+  const checkAuth = useCallback(async () => {
     try {
-      const res = await fetch('/api/auth/me', {
-        headers: { Authorization: `Bearer ${t}` }
-      });
+      const res = await fetch('/api/auth/me', { credentials: 'include' });
       if (res.ok) {
-        const data = await res.json();
-        setUser(data);
+        setUser(await res.json());
       } else {
-        localStorage.removeItem('lp_token');
-        setToken(null);
+        setUser(null);
       }
     } catch {
-      localStorage.removeItem('lp_token');
-      setToken(null);
+      setUser(null);
     } finally {
       setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    if (token) {
-      validateToken(token);
-    } else {
-      setLoading(false);
-    }
-  }, [token, validateToken]);
+    checkAuth();
+  }, [checkAuth]);
 
   const handleLogin = async (username: string, password: string): Promise<boolean> => {
     try {
       const res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({ username, password })
       });
       if (!res.ok) return false;
       const data = await res.json();
-      localStorage.setItem('lp_token', data.token);
-      setToken(data.token);
       setUser(data.user);
       return true;
     } catch {
@@ -87,9 +76,11 @@ export default function AdminRoute() {
     }
   };
 
-  const handleLogout = () => {
-    localStorage.removeItem('lp_token');
-    setToken(null);
+  const handleLogout = async () => {
+    await fetch('/api/auth/logout', {
+      method: 'POST',
+      credentials: 'include'
+    });
     setUser(null);
     navigate('/');
   };
@@ -162,6 +153,78 @@ function AdminLogin({ onLogin, onBack }: { onLogin: (u: string, p: string) => Pr
   );
 }
 
+function ChangePassword({ onClose }: { onClose: () => void }) {
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setSuccess('');
+    if (newPassword !== confirmPassword) {
+      setError('New passwords do not match');
+      return;
+    }
+    if (newPassword.length < 6) {
+      setError('New password must be at least 6 characters');
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const res = await fetch('/api/auth/change-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ current_password: currentPassword, new_password: newPassword })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setSuccess(data.message || 'Password changed successfully');
+        setCurrentPassword('');
+        setNewPassword('');
+        setConfirmPassword('');
+      } else {
+        setError(data.detail || 'Failed to change password');
+      }
+    } catch (e) {
+      setError('Network error');
+    }
+    setSubmitting(false);
+  };
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" onClick={e => e.stopPropagation()}>
+        <h3>Change Password</h3>
+        {error && <div className="info-message" style={{background: '#7f1d1d26', border: '1px solid #991b1b'}}>{error}</div>}
+        {success && <div className="info-message">{success}</div>}
+        <form onSubmit={handleSubmit}>
+          <div className="login-field">
+            <label>Current Password</label>
+            <input type="password" value={currentPassword} onChange={e => setCurrentPassword(e.target.value)} required />
+          </div>
+          <div className="login-field">
+            <label>New Password</label>
+            <input type="password" value={newPassword} onChange={e => setNewPassword(e.target.value)} required />
+          </div>
+          <div className="login-field">
+            <label>Confirm New Password</label>
+            <input type="password" value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} required />
+          </div>
+          <div style={{ display: 'flex', gap: 12, marginTop: 16 }}>
+            <button type="submit" disabled={submitting}>{submitting ? 'Saving...' : 'Change Password'}</button>
+            <button type="button" onClick={onClose} style={{ background: 'transparent', color: '#94a3b8' }}>Cancel</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 function AdminPortal({ user, onLogout }: { user: AuthUser; onLogout: () => void }) {
   const [regions, setRegions] = useState<Region[]>([]);
   const [instances, setInstances] = useState<Instance[]>([]);
@@ -171,18 +234,16 @@ function AdminPortal({ user, onLogout }: { user: AuthUser; onLogout: () => void 
   const [message, setMessage] = useState('');
   const [vultrError, setVultrError] = useState('');
   const [selectedRegion, setSelectedRegion] = useState('');
+  const [showChangePassword, setShowChangePassword] = useState(false);
 
-  const tokenValue = localStorage.getItem('lp_token') || '';
-
-  // Fetch initial data once on mount — no auto-retry on error
+  // Fetch initial data once on mount
   useEffect(() => {
-    const h = { Authorization: `Bearer ${tokenValue}` };
     (async () => {
       try {
         const [rRes, iRes, jRes] = await Promise.all([
-          fetch('/api/regions', { headers: h }),
-          fetch('/api/instances', { headers: h }),
-          fetch('/api/jobs', { headers: h })
+          fetch('/api/regions', { credentials: 'include' }),
+          fetch('/api/instances', { credentials: 'include' }),
+          fetch('/api/jobs', { credentials: 'include' })
         ]);
         if (rRes.ok) setRegions(await rRes.json());
         if (iRes.ok) setInstances(await iRes.json());
@@ -194,10 +255,9 @@ function AdminPortal({ user, onLogout }: { user: AuthUser; onLogout: () => void 
   }, []);
 
   useEffect(() => {
-    const h = { Authorization: `Bearer ${tokenValue}` };
     (async () => {
       try {
-        const res = await fetch('/api/vultr/regions', { headers: h });
+        const res = await fetch('/api/vultr/regions', { credentials: 'include' });
         if (res.ok) {
           setVultrRegions(await res.json());
           setVultrError('');
@@ -211,10 +271,6 @@ function AdminPortal({ user, onLogout }: { user: AuthUser; onLogout: () => void 
     })();
   }, []);
 
-  const authHeaders = () => ({
-    Authorization: `Bearer ${localStorage.getItem('lp_token') || ''}`
-  });
-
   const addRegion = async () => {
     if (!selectedRegion) return;
     const vr = vultrRegions.find(r => r.id === selectedRegion);
@@ -223,7 +279,8 @@ function AdminPortal({ user, onLogout }: { user: AuthUser; onLogout: () => void 
     try {
       const res = await fetch('/api/regions', {
         method: 'POST',
-        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({
           vultr_region_id: vr.id,
           name: `${vr.city}, ${vr.country}`,
@@ -248,7 +305,7 @@ function AdminPortal({ user, onLogout }: { user: AuthUser; onLogout: () => void 
     if (!confirm('Remove this region?')) return;
     setLoading(true);
     try {
-      const res = await fetch(`/api/regions/${id}`, { method: 'DELETE', headers: authHeaders() });
+      const res = await fetch(`/api/regions/${id}`, { method: 'DELETE', credentials: 'include' });
       if (res.ok) {
         setRegions(prev => prev.filter(r => r.id !== id));
       }
@@ -264,7 +321,8 @@ function AdminPortal({ user, onLogout }: { user: AuthUser; onLogout: () => void 
     try {
       const res = await fetch('/api/instances', {
         method: 'POST',
-        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({ region_id: regionId })
       });
       if (res.ok) {
@@ -284,7 +342,7 @@ function AdminPortal({ user, onLogout }: { user: AuthUser; onLogout: () => void 
     if (!confirm('Destroy this instance?')) return;
     setLoading(true);
     try {
-      const res = await fetch(`/api/instances/${instanceId}`, { method: 'DELETE', headers: authHeaders() });
+      const res = await fetch(`/api/instances/${instanceId}`, { method: 'DELETE', credentials: 'include' });
       if (res.ok) {
         setInstances(prev => prev.filter(i => i.vultr_instance_id !== instanceId));
       }
@@ -298,7 +356,7 @@ function AdminPortal({ user, onLogout }: { user: AuthUser; onLogout: () => void 
     setLoading(true);
     setVultrError('');
     try {
-      const res = await fetch('/api/instances/sync', { method: 'POST', headers: authHeaders() });
+      const res = await fetch('/api/instances/sync', { method: 'POST', credentials: 'include' });
       if (res.ok) {
         setMessage('Synced with Vultr');
       } else {
@@ -316,7 +374,7 @@ function AdminPortal({ user, onLogout }: { user: AuthUser; onLogout: () => void 
     setLoading(true);
     setVultrError('');
     try {
-      const res = await fetch('/api/jobs/trigger', { method: 'POST', headers: authHeaders() });
+      const res = await fetch('/api/jobs/trigger', { method: 'POST', credentials: 'include' });
       if (res.ok) {
         setMessage('Jobs triggered');
       } else {
@@ -335,10 +393,12 @@ function AdminPortal({ user, onLogout }: { user: AuthUser; onLogout: () => void 
         <h1>Admin Portal</h1>
         <div className="header-actions">
           <span style={{ color: '#94a3b8' }}>Logged in as {user.username}</span>
+          <button onClick={() => setShowChangePassword(true)}>Change Password</button>
           <button onClick={onLogout}>Logout</button>
         </div>
       </header>
 
+      {showChangePassword && <ChangePassword onClose={() => setShowChangePassword(false)} />}
       <div className="modal-body">
         {message && <div className="info-message">{message}</div>}
         {vultrError && <div className="info-message" style={{background: '#7f1d1d26', border: '1px solid #991b1b'}}>{vultrError}</div>}
