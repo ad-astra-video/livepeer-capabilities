@@ -2,6 +2,11 @@
 # Cloud-init startup script for Livepeer worker instances
 # SECURITY: Keystore + password delivered via separate S3 URLs. Never in user-data.
 # All secrets live in tmpfs (RAM only) — never touches persistent disk.
+#
+# Flow:
+#   1. Create tmpfs + download wallet from S3
+#   2. If download fails -> self-destruct in 5 min
+#   3. If OK -> proceed with apt, docker, compose
 
 export MAIN_SERVER_URL="{{MAIN_SERVER_URL}}"
 export WORKER_API_TOKEN="{{WORKER_API_TOKEN}}"
@@ -21,7 +26,6 @@ report_status() {
     local component="$1"
     local status="$2"
     local message="${3:-}"
-    # Sanitize message for JSON: replace newlines with spaces, escape quotes
     message=$(printf '%s' "$message" | tr '\n\r' '  ' | sed 's/"/\\"/g')
     curl -sf -X POST "$MAIN_SERVER_URL/api/instances/$VULTR_INSTANCE_ID/status" \
         -H "Content-Type: application/json" \
@@ -30,45 +34,19 @@ report_status() {
 
 report_status "startup" "started" "Cloud-init began"
 
-# Install dependencies
-apt-get update && apt-get install -y python3 python3-pip python3-venv curl git
-report_status "apt" "ok" "Dependencies installed"
+# ─── Phase 1: Wallet download (MUST succeed before anything else) ───
+# Create RAM-only tmpfs for wallet
+mkdir -p /tmp/wallet
+mount -t tmpfs -o size=10M,mode=700 tmpfs /tmp/wallet
+report_status "wallet-tmpfs" "ok" "RAM-only wallet mount created"
 
-# Install Docker
-curl -fsSL https://get.docker.com | sh
-# Vultr images may use 'root' or another default user; only add 'ubuntu' if it exists
-if id ubuntu &>/dev/null; then
-    usermod -aG docker ubuntu
-fi
-report_status "docker" "ok" "Docker installed"
-
-# Create persistent data directories (for gateway state, NOT wallet)
-mkdir -p /data/gateway-transcoding
-mkdir -p /data/gateway-ai-batch
-mkdir -p /data/gateway-ai-lv2v
-
-# Create tmpfs mounts for keystore (RAM-only, never touches disk)
-mkdir -p /data/gateway-transcoding/keystore
-mkdir -p /data/gateway-ai-batch/keystore
-mkdir -p /data/gateway-ai-lv2v/keystore
-
-mount -t tmpfs -o size=10M,mode=755 tmpfs /data/gateway-transcoding/keystore
-mount -t tmpfs -o size=10M,mode=755 tmpfs /data/gateway-ai-batch/keystore
-mount -t tmpfs -o size=10M,mode=755 tmpfs /data/gateway-ai-lv2v/keystore
-report_status "tmpfs" "ok" "RAM-only keystore mounts created"
-
-# Create RAM-only workspace for runtime files (docker-compose, .env)
-mkdir -p /run/worker
-mount -t tmpfs -o size=20M,mode=755 tmpfs /run/worker
-
-# ─── Download keystore and password from S3 ───
+# Download helper
 download_s3_file() {
     local url="$1"
     local out_path="$2"
     local desc="$3"
     local err_file="/tmp/${desc}_curl_err.log"
 
-    # Reset globals
     _LAST_HTTP_CODE=""
     _LAST_CURL_EXIT=""
     _LAST_CURL_ERROR=""
@@ -88,7 +66,6 @@ download_s3_file() {
     echo "  Output file: $out_path"
     echo "  File size: $(stat -c%s "$out_path" 2>/dev/null || echo 0) bytes"
 
-    # Capture error details in globals for the caller
     _LAST_HTTP_CODE="${http_code:-unknown}"
     _LAST_CURL_EXIT="$curl_exit"
     if [ -s "$err_file" ]; then
@@ -116,40 +93,85 @@ download_s3_file() {
     return 0
 }
 
-if [ -n "$S3_KEYSTORE_URL" ] && [ -n "$S3_PASSWORD_URL" ]; then
-    if download_s3_file "$S3_KEYSTORE_URL" /data/gateway-transcoding/keystore/wallet "keystore"; then
-        cp /data/gateway-transcoding/keystore/wallet /data/gateway-ai-batch/keystore/wallet
-        cp /data/gateway-transcoding/keystore/wallet /data/gateway-ai-lv2v/keystore/wallet
-        chmod 600 /data/gateway-*/keystore/wallet
-        report_status "wallet" "downloaded" "Keystore downloaded to RAM ($(stat -c%s /data/gateway-transcoding/keystore/wallet 2>/dev/null || echo 0) bytes)"
-    else
-        report_status "wallet" "error" "Failed to download keystore from S3 (HTTP ${_LAST_HTTP_CODE:-unknown}, curl exit ${_LAST_CURL_EXIT:-unknown}, URL=${S3_KEYSTORE_URL}) ${_LAST_CURL_ERROR}"
-    fi
-
-    if download_s3_file "$S3_PASSWORD_URL" /data/gateway-transcoding/keystore/.password "password"; then
-        cp /data/gateway-transcoding/keystore/.password /data/gateway-ai-batch/keystore/.password
-        cp /data/gateway-transcoding/keystore/.password /data/gateway-ai-lv2v/keystore/.password
-        chmod 600 /data/gateway-*/keystore/.password
-        report_status "password" "downloaded" "Password downloaded to RAM"
-    else
-        report_status "password" "error" "Failed to download password from S3 (HTTP ${_LAST_HTTP_CODE:-unknown}, curl exit ${_LAST_CURL_EXIT:-unknown}, URL=${S3_PASSWORD_URL}) ${_LAST_CURL_ERROR}"
-    fi
-
-    # Notify backend that wallet was downloaded (so it can delete S3 objects early)
-    if [ -f /data/gateway-transcoding/keystore/wallet ] && [ -f /data/gateway-transcoding/keystore/.password ]; then
-        curl -sf -X POST "$MAIN_SERVER_URL/api/instances/$VULTR_INSTANCE_ID/wallet-downloaded" \
-            -H "Content-Type: application/json" \
-            -d "{\"worker_token\":\"$WORKER_API_TOKEN\"}" || true
-    fi
-else
-    echo "WARNING: S3_KEYSTORE_URL or S3_PASSWORD_URL not provided, skipping wallet download"
-    report_status "wallet" "skipped" "No S3 URLs provided"
+# Check URLs exist
+if [ -z "$S3_KEYSTORE_URL" ] || [ -z "$S3_PASSWORD_URL" ]; then
+    echo "FATAL: S3_KEYSTORE_URL or S3_PASSWORD_URL not provided"
+    report_status "wallet" "error" "No S3 URLs provided for wallet download"
+    echo "Scheduling self-destruct in 5 minutes..."
+    ( sleep 300; shutdown -h now "Wallet download failed: no S3 URLs" ) &
+    exit 1
 fi
+
+# Download keystore
+if ! download_s3_file "$S3_KEYSTORE_URL" /tmp/wallet/keystore "keystore"; then
+    echo "FATAL: Keystore download failed"
+    report_status "wallet" "error" "Keystore download failed (HTTP ${_LAST_HTTP_CODE:-unknown}, curl_exit ${_LAST_CURL_EXIT:-unknown}, URL=${S3_KEYSTORE_URL}) ${_LAST_CURL_ERROR}"
+    echo "Scheduling self-destruct in 5 minutes..."
+    ( sleep 300; shutdown -h now "Wallet download failed: keystore" ) &
+    exit 1
+fi
+
+# Download password
+if ! download_s3_file "$S3_PASSWORD_URL" /tmp/wallet/password "password"; then
+    echo "FATAL: Password download failed"
+    report_status "wallet" "error" "Password download failed (HTTP ${_LAST_HTTP_CODE:-unknown}, curl_exit ${_LAST_CURL_EXIT:-unknown}, URL=${S3_PASSWORD_URL}) ${_LAST_CURL_ERROR}"
+    echo "Scheduling self-destruct in 5 minutes..."
+    ( sleep 300; shutdown -h now "Wallet download failed: password" ) &
+    exit 1
+fi
+
+chmod 600 /tmp/wallet/keystore /tmp/wallet/password
+report_status "wallet" "downloaded" "Keystore ($(stat -c%s /tmp/wallet/keystore)B) + password ($(stat -c%s /tmp/wallet/password)B) in RAM"
+
+# ─── Phase 2: Full setup (only reached if wallet download succeeded) ───
+
+# Install dependencies
+apt-get update && apt-get install -y python3 python3-pip python3-venv curl git
+report_status "apt" "ok" "Dependencies installed"
+
+# Install Docker
+curl -fsSL https://get.docker.com | sh
+if id ubuntu &>/dev/null; then
+    usermod -aG docker ubuntu
+fi
+report_status "docker" "ok" "Docker installed"
+
+# Create persistent data directories (for gateway state, NOT wallet)
+mkdir -p /data/gateway-transcoding
+mkdir -p /data/gateway-ai-batch
+mkdir -p /data/gateway-ai-lv2v
+
+# Create tmpfs mounts for keystore (RAM-only, never touches disk)
+mkdir -p /data/gateway-transcoding/keystore
+mkdir -p /data/gateway-ai-batch/keystore
+mkdir -p /data/gateway-ai-lv2v/keystore
+
+mount -t tmpfs -o size=10M,mode=755 tmpfs /data/gateway-transcoding/keystore
+mount -t tmpfs -o size=10M,mode=755 tmpfs /data/gateway-ai-batch/keystore
+mount -t tmpfs -o size=10M,mode=755 tmpfs /data/gateway-ai-lv2v/keystore
+report_status "tmpfs" "ok" "RAM-only keystore mounts created"
+
+# Copy wallet from early tmpfs into gateway keystore dirs
+cp /tmp/wallet/keystore /data/gateway-transcoding/keystore/wallet
+cp /tmp/wallet/keystore /data/gateway-ai-batch/keystore/wallet
+cp /tmp/wallet/keystore /data/gateway-ai-lv2v/keystore/wallet
+cp /tmp/wallet/password /data/gateway-transcoding/keystore/.password
+cp /tmp/wallet/password /data/gateway-ai-batch/keystore/.password
+cp /tmp/wallet/password /data/gateway-ai-lv2v/keystore/.password
+chmod 600 /data/gateway-*/keystore/wallet /data/gateway-*/keystore/.password
+
+# Wipe early wallet tmpfs
+rm -f /tmp/wallet/keystore /tmp/wallet/password
+umount /tmp/wallet
+
+# Create RAM-only workspace for runtime files (docker-compose, .env)
+mkdir -p /run/worker
+mount -t tmpfs -o size=20M,mode=755 tmpfs /run/worker
 
 # Setup worker directory in RAM
 cd /run/worker
 
-# Write fallback agent script so we don't embed multi-line Python inside YAML
+# Write fallback agent script
 cat > /run/worker/fallback_agent.py << 'PYEOF'
 import os, time, httpx
 instance_id = os.environ.get("VULTR_INSTANCE_ID", "")
@@ -169,8 +191,6 @@ while True:
 PYEOF
 
 # Create docker-compose.yml
-# NOTE: No wallet secrets in this file. Password is read from tmpfs at runtime.
-# NOTE: Host tmpfs at /data/gateway-*/keystore is bind-mounted through; no container tmpfs needed.
 cat > docker-compose.yml << 'WORKEREOF'
 services:
   gateway-transcoding:
