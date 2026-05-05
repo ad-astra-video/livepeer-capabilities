@@ -11,7 +11,7 @@ webapp/dist/
 data/admin/
 data/gateway-*/
 data/wallets/*.json
-data/wallets/*.used.json
+data/wallets/*.password
 !data/wallets/README.md
 !data/wallets/encrypt_wallets.py
 !data/wallets/upload_to_s3.py
