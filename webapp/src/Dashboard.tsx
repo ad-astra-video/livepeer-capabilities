@@ -267,6 +267,7 @@ interface GatewayData {
   orchestrators: Orchestrator[];
   capabilities_names: Record<string, string>;
   regions: Record<string, { instance_id: string; orch_count: number; last_seen: string }>;
+  region_details: Record<string, { code: string; city: string; country: string }>;
 }
 
 export default function Dashboard() {
@@ -314,6 +315,26 @@ export default function Dashboard() {
     }
     return [...codes].sort();
   }, [gatewayData]);
+
+  // Build a combined region_details lookup from all gateways
+  const allRegionDetails = useMemo(() => {
+    const map: Record<string, { code: string; city: string; country: string }> = {};
+    for (const gw of Object.values(gatewayData)) {
+      for (const [code, detail] of Object.entries(gw.region_details || {})) {
+        map[code] = detail;
+      }
+    }
+    return map;
+  }, [gatewayData]);
+
+  // Label for a region: e.g. "SEWS Atlanta, US" or just "SEWS"
+  const regionLabel = (code: string) => {
+    const d = allRegionDetails[code];
+    const parts = [code.toUpperCase()];
+    if (d?.city) parts.push(d.city);
+    if (d?.country) parts.push(d.country);
+    return parts.join(" ");
+  };
 
   const activeGateway = gatewayData[activeTab];
   const orchs = activeGateway?.orchestrators || [];
@@ -396,6 +417,7 @@ export default function Dashboard() {
             key={code}
             className={`region-btn ${selectedRegion === code ? 'active' : ''}`}
             onClick={() => setSelectedRegion(code)}
+            title={`${allRegionDetails[code]?.city || ''} ${allRegionDetails[code]?.country || ''}`}
           >
             {code.toUpperCase()}
           </button>
@@ -553,7 +575,7 @@ export default function Dashboard() {
                                   <td>
                                     <div className="tag-list">
                                       {(orch.regions || []).map(r => (
-                                        <span key={r} className="tag region">{r.toUpperCase()}</span>
+                                        <span key={r} className="tag region" title={`${allRegionDetails[r]?.city || ''} ${allRegionDetails[r]?.country || ''}`}>{r.toUpperCase()}</span>
                                       ))}
                                     </div>
                                   </td>
@@ -654,7 +676,7 @@ export default function Dashboard() {
                                   <td>
                                     <div className="tag-list">
                                       {(orch.regions || []).map(r => (
-                                        <span key={r} className="tag region">{r.toUpperCase()}</span>
+                                        <span key={r} className="tag region" title={`${allRegionDetails[r]?.city || ''} ${allRegionDetails[r]?.country || ''}`}>{r.toUpperCase()}</span>
                                       ))}
                                     </div>
                                   </td>
@@ -697,7 +719,7 @@ export default function Dashboard() {
                                         <td>
                                           <div className="tag-list">
                                             {(orch.regions || []).map(r => (
-                                              <span key={r} className="tag region">{r.toUpperCase()}</span>
+                                              <span key={r} className="tag region" title={`${allRegionDetails[r]?.city || ''} ${allRegionDetails[r]?.country || ''}`}>{r.toUpperCase()}</span>
                                             ))}
                                           </div>
                                         </td>
