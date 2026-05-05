@@ -161,7 +161,7 @@ async def vultr_regions(user: User = Depends(get_current_user)):
         regions = await vultr.list_regions()
         return [{"id": r["id"], "city": r["city"], "country": r["country"], "continent": r["continent"]} for r in regions]
     except VultrAPIError as e:
-        raise HTTPException(status_code=429, detail=str(e))
+        raise HTTPException(status_code=e.status_code, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -216,7 +216,7 @@ async def create_instance(req: dict, db: Session = Depends(get_db), user: User =
                 wallet.get("s3_keystore_key"),
                 wallet.get("s3_password_key")
             )
-        raise HTTPException(status_code=429, detail=str(e))
+        raise HTTPException(status_code=e.status_code, detail=str(e))
     except Exception as e:
         if wallet_source:
             release_wallet(wallet_source)
@@ -321,7 +321,7 @@ async def sync_instances(db: Session = Depends(get_db), user: User = Depends(get
         db.commit()
         return {"ok": True, "count": len(vultr_instances)}
     except VultrAPIError as e:
-        raise HTTPException(status_code=429, detail=str(e))
+        raise HTTPException(status_code=e.status_code, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

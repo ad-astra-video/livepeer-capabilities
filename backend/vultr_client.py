@@ -11,7 +11,9 @@ ARB_ETH_URL = os.environ.get("ARB_ETH_URL", "https://arb1.arbitrum.io/rpc")
 
 class VultrAPIError(Exception):
     """Raised when Vultr API returns an error."""
-    pass
+    def __init__(self, message: str, status_code: int = 500):
+        super().__init__(message)
+        self.status_code = status_code
 
 class VultrClient:
     def __init__(self):
@@ -23,10 +25,10 @@ class VultrClient:
             resp = await client.request(method, url, headers=self.headers, json=json)
             if resp.status_code == 429:
                 detail = resp.json().get("error", "Rate limited") if resp.headers.get("content-type","").startswith("application/json") else "Rate limited"
-                raise VultrAPIError(f"Vultr API rate limited (429): {detail}")
+                raise VultrAPIError(f"Vultr API rate limited (429): {detail}", status_code=429)
             if resp.status_code >= 400:
                 detail = resp.json().get("error", resp.text) if resp.headers.get("content-type","").startswith("application/json") else resp.text
-                raise VultrAPIError(f"Vultr API error ({resp.status_code}): {detail}")
+                raise VultrAPIError(f"Vultr API error ({resp.status_code}): {detail}", status_code=resp.status_code)
             return resp.json()
 
     async def list_regions(self) -> List[Dict]:
