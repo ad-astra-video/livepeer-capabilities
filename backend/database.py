@@ -35,6 +35,7 @@ class Instance(Base):
     __tablename__ = "instances"
     id = Column(Integer, primary_key=True, index=True)
     vultr_instance_id = Column(String, unique=True, index=True)
+    instance_uuid = Column(String, index=True, nullable=True)
     region_id = Column(String)
     label = Column(String)
     ip_address = Column(String)

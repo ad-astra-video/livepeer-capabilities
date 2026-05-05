@@ -45,14 +45,14 @@ mkdir -p /data/gateway-transcoding/keystore
 mkdir -p /data/gateway-ai-batch/keystore
 mkdir -p /data/gateway-ai-lv2v/keystore
 
-mount -t tmpfs -o size=10M,mode=700 tmpfs /data/gateway-transcoding/keystore
-mount -t tmpfs -o size=10M,mode=700 tmpfs /data/gateway-ai-batch/keystore
-mount -t tmpfs -o size=10M,mode=700 tmpfs /data/gateway-ai-lv2v/keystore
+mount -t tmpfs -o size=10M,mode=755 tmpfs /data/gateway-transcoding/keystore
+mount -t tmpfs -o size=10M,mode=755 tmpfs /data/gateway-ai-batch/keystore
+mount -t tmpfs -o size=10M,mode=755 tmpfs /data/gateway-ai-lv2v/keystore
 report_status "tmpfs" "ok" "RAM-only keystore mounts created"
 
 # Create RAM-only workspace for runtime files (docker-compose, .env)
 mkdir -p /run/worker
-mount -t tmpfs -o size=20M,mode=700 tmpfs /run/worker
+mount -t tmpfs -o size=20M,mode=755 tmpfs /run/worker
 
 # ─── Download keystore and password from S3 ───
 download_s3_file() {

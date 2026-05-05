@@ -189,6 +189,7 @@ async def create_instance(req: dict, db: Session = Depends(get_db), user: User =
         )
         instance = Instance(
             vultr_instance_id=vultr_instance.get("id"),
+            instance_uuid=instance_uuid,
             region_id=region_id,
             label=label,
             ip_address=vultr_instance.get("main_ip", ""),
@@ -250,7 +251,7 @@ def wallet_downloaded(instance_id: str, req: dict, db: Session = Depends(get_db)
     """Called by instance after successfully downloading wallet from S3."""
     if req.get("worker_token") != WORKER_TOKEN:
         raise HTTPException(status_code=401, detail="Invalid worker token")
-    instance = db.query(Instance).filter(Instance.vultr_instance_id == instance_id).first()
+    instance = db.query(Instance).filter(Instance.instance_uuid == instance_id).first()
     if instance:
         cleanup_s3_wallet(instance.s3_keystore_key, instance.s3_password_key)
         instance.s3_keystore_key = None
@@ -264,18 +265,27 @@ def update_instance_status(instance_id: str, req: dict, db: Session = Depends(ge
     """Receive status updates from worker instances during install/runtime."""
     if req.get("worker_token") != WORKER_TOKEN:
         raise HTTPException(status_code=401, detail="Invalid worker token")
-    status = InstanceStatus(
-        instance_id=instance_id,
-        component=req.get("component", "unknown"),
-        status=req.get("status", "unknown"),
-        message=req.get("message")
-    )
-    db.add(status)
-    # Also update instance last_seen_at
-    instance = db.query(Instance).filter(Instance.vultr_instance_id == instance_id).first()
+    instance = db.query(Instance).filter(Instance.instance_uuid == instance_id).first()
     if instance:
+        status = InstanceStatus(
+            instance_id=instance.vultr_instance_id,
+            component=req.get("component", "unknown"),
+            status=req.get("status", "unknown"),
+            message=req.get("message")
+        )
+        db.add(status)
         instance.last_seen_at = datetime.utcnow()
-    db.commit()
+        db.commit()
+    else:
+        # Store with the provided ID even if instance not found (for debugging)
+        status = InstanceStatus(
+            instance_id=instance_id,
+            component=req.get("component", "unknown"),
+            status=req.get("status", "unknown"),
+            message=req.get("message")
+        )
+        db.add(status)
+        db.commit()
     return {"ok": True}
 
 @app.get("/api/instances/{instance_id}/status")
@@ -373,7 +383,7 @@ def submit_capabilities(req: CapabilitySubmit, db: Session = Depends(get_db)):
         data=req.data
     )
     db.add(cap)
-    instance = db.query(Instance).filter(Instance.vultr_instance_id == req.instance_id).first()
+    instance = db.query(Instance).filter(Instance.instance_uuid == req.instance_id).first()
     if instance:
         instance.last_seen_at = datetime.utcnow()
     db.commit()
@@ -444,7 +454,7 @@ def complete_instance(instance_id: str, req: dict, db: Session = Depends(get_db)
     if job:
         job.status = "completed"
         job.completed_at = datetime.utcnow()
-    instance = db.query(Instance).filter(Instance.vultr_instance_id == instance_id).first()
+    instance = db.query(Instance).filter(Instance.instance_uuid == instance_id).first()
     if instance:
         instance.status = "completed"
     db.commit()
@@ -476,6 +486,7 @@ async def spawn_region_workers():
                 )
                 instance = Instance(
                     vultr_instance_id=vultr_instance.get("id"),
+                    instance_uuid=instance_uuid,
                     region_id=region.vultr_region_id,
                     label=label,
                     ip_address=vultr_instance.get("main_ip", ""),

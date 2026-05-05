@@ -18,6 +18,9 @@ def migrate():
         print("Added token_version column to users")
     
     # Add new columns if missing
+    if "instance_uuid" not in columns:
+        cursor.execute("ALTER TABLE instances ADD COLUMN instance_uuid TEXT")
+        print("Added instance_uuid column")
     if "wallet_address" not in columns:
         cursor.execute("ALTER TABLE instances ADD COLUMN wallet_address TEXT")
         print("Added wallet_address column")
@@ -35,6 +38,7 @@ def migrate():
             CREATE TABLE instances_new (
                 id INTEGER PRIMARY KEY,
                 vultr_instance_id TEXT UNIQUE,
+                instance_uuid TEXT,
                 region_id TEXT,
                 label TEXT,
                 ip_address TEXT,
@@ -48,7 +52,7 @@ def migrate():
         """)
         cursor.execute("""
             INSERT INTO instances_new 
-            SELECT id, vultr_instance_id, region_id, label, ip_address, status,
+            SELECT id, vultr_instance_id, instance_uuid, region_id, label, ip_address, status,
                    wallet_address, eth_password, s3_object_key, created_at, last_seen_at
             FROM instances
         """)
