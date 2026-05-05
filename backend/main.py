@@ -491,7 +491,6 @@ def get_aggregated_capabilities(db: Session = Depends(get_db)):
                 "last_seen": r.received_at.isoformat() if r.received_at else None,
             }
 
-        # Dedup orchestrators by address — regions stored as plain code strings
         # Dedup orchestrators by (address, orch_uri) across regions
         orch_map = aggregated[gt].get("_orch_map") or {}
         for orch in orchs:
