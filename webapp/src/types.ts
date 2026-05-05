@@ -42,6 +42,7 @@ export interface Orchestrator {
   capabilities: Capabilities;
   capabilities_prices: CapabilityPrice[] | null;
   hardware: HardwareInformation[] | null;
+  regions: string[];
 }
 
 export interface NetworkCapabilities {

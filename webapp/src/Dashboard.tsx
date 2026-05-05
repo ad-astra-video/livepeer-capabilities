@@ -276,6 +276,7 @@ export default function Dashboard() {
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [activeTab, setActiveTab] = useState<string>('transcoding');
   const [showDupModal, setShowDupModal] = useState(false);
+  const [selectedRegion, setSelectedRegion] = useState<string>('');
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -303,38 +304,66 @@ export default function Dashboard() {
     return () => clearInterval(interval);
   }, [fetchData]);
 
+  // Collect all unique region codes across all gateway types
+  const allRegions = useMemo(() => {
+    const codes = new Set<string>();
+    for (const gw of Object.values(gatewayData)) {
+      for (const code of Object.keys(gw.regions || {})) {
+        codes.add(code);
+      }
+    }
+    return [...codes].sort();
+  }, [gatewayData]);
+
   const activeGateway = gatewayData[activeTab];
   const orchs = activeGateway?.orchestrators || [];
 
+  // Filter orchestrators by selected region (if any)
+  const filteredOrchs = useMemo(() => {
+    if (!selectedRegion) return orchs;
+    return orchs.filter(o => o.regions && o.regions.includes(selectedRegion));
+  }, [orchs, selectedRegion]);
+
+  // Global GPU entries (filtered by region if selected)
   const gpuEntries = useMemo(() => {
     const entries: GPUEntry[] = [];
     for (const gw of Object.values(gatewayData)) {
       if (gw.gateway_type === 'transcoding') continue;
+      const regionOrchs = selectedRegion
+        ? (gw.orchestrators || []).filter(o => o.regions && o.regions.includes(selectedRegion))
+        : gw.orchestrators || [];
       for (const regionId in gw.regions || {}) {
-        entries.push(...extractGPUs(gw.orchestrators || [], regionId));
+        if (selectedRegion && regionId !== selectedRegion) continue;
+        entries.push(...extractGPUs(regionOrchs, regionId));
       }
     }
     return entries;
-  }, [gatewayData]);
+  }, [gatewayData, selectedRegion]);
 
   const globalAnalysis = useMemo(() => analyzeGPUs(gpuEntries), [gpuEntries]);
 
   const totalHEVC = useMemo(() => {
     const transcoding = gatewayData['transcoding'];
-    return countHEVCEncode(transcoding?.orchestrators || []);
-  }, [gatewayData]);
+    const regionOrchs = selectedRegion
+      ? (transcoding?.orchestrators || []).filter(o => o.regions && o.regions.includes(selectedRegion))
+      : transcoding?.orchestrators || [];
+    return countHEVCEncode(regionOrchs);
+  }, [gatewayData, selectedRegion]);
 
   const totalOrchestrators = useMemo(() => {
     let count = 0;
     for (const gw of Object.values(gatewayData)) {
-      count += (gw.orchestrators || []).length;
+      const regionOrchs = selectedRegion
+        ? (gw.orchestrators || []).filter(o => o.regions && o.regions.includes(selectedRegion))
+        : gw.orchestrators || [];
+      count += regionOrchs.length;
     }
     return count;
-  }, [gatewayData]);
+  }, [gatewayData, selectedRegion]);
 
   const activeGpuEntries = useMemo(() => {
-    return extractGPUs(orchs, activeTab);
-  }, [orchs, activeTab]);
+    return extractGPUs(filteredOrchs, activeTab);
+  }, [filteredOrchs, activeTab]);
 
   const activeAnalysis = useMemo(() => analyzeGPUs(activeGpuEntries), [activeGpuEntries]);
 
@@ -354,10 +383,30 @@ export default function Dashboard() {
         </div>
       </header>
 
+      {/* Region Filter */}
+      <section className="region-filter">
+        <button
+          className={`region-btn ${!selectedRegion ? 'active' : ''}`}
+          onClick={() => setSelectedRegion('')}
+        >
+          ALL
+        </button>
+        {allRegions.map(code => (
+          <button
+            key={code}
+            className={`region-btn ${selectedRegion === code ? 'active' : ''}`}
+            onClick={() => setSelectedRegion(code)}
+          >
+            {code.toUpperCase()}
+          </button>
+        ))}
+      </section>
+
       <section className="summary-cards">
         <div className="card">
           <h3>{ICON_PERSON} Total Orchestrators</h3>
           <div className="card-value">{totalOrchestrators}</div>
+          {selectedRegion && <div className="card-detail">filtered: {selectedRegion.toUpperCase()}</div>}
         </div>
         <div className="card">
           <h3>{ICON_GPU} Total AI GPUs</h3>
@@ -461,17 +510,17 @@ export default function Dashboard() {
 
           {!loading && !error && activeGateway && (
             <>
-              {orchs.length === 0 ? (
-                <div className="empty">No orchestrators available.</div>
+              {filteredOrchs.length === 0 ? (
+                <div className="empty">{selectedRegion ? `No orchestrators in ${selectedRegion.toUpperCase()}.` : 'No orchestrators available.'}</div>
               ) : (
                 <>
                   <div className="section-summary">
-                    <span>{ICON_PERSON} Orchestrators: <strong>{orchs.length}</strong></span>
+                    <span>{ICON_PERSON} Orchestrators: <strong>{filteredOrchs.length}</strong></span>
                     {activeGateway.regions && Object.keys(activeGateway.regions).length > 0 && (
                       <span>Regions: <strong>{Object.keys(activeGateway.regions).length}</strong></span>
                     )}
                     {activeTab === 'transcoding' ? (
-                      <span>GPU Transcoders: <strong>{countHEVCEncode(orchs)}</strong></span>
+                      <span>GPU Transcoders: <strong>{countHEVCEncode(filteredOrchs)}</strong></span>
                     ) : (
                       <>
                         <span>{ICON_GPU} Total GPU entries: <strong>{activeGpuEntries.length}</strong></span>
@@ -489,10 +538,10 @@ export default function Dashboard() {
                       <div className="table-wrapper">
                         <table className="data-table">
                           <thead>
-                            <tr><th>Address</th><th>URI</th><th>HEVC Encode Capacity</th></tr>
+                            <tr><th>Address</th><th>URI</th><th>HEVC Encode Capacity</th><th>Regions</th></tr>
                           </thead>
                           <tbody>
-                            {orchs.map((orch, i) => {
+                            {filteredOrchs.map((orch, i) => {
                               const hevcCapacity = orch.capabilities?.capacities?.[HEVC_ENCODE_CAP];
                               return (
                                 <tr key={i}>
@@ -501,6 +550,13 @@ export default function Dashboard() {
                                   </td>
                                   <td className="mono small">{orch.orch_uri}</td>
                                   <td className="mono">{hevcCapacity ?? '\u2014'}</td>
+                                  <td>
+                                    <div className="tag-list">
+                                      {(orch.regions || []).map(r => (
+                                        <span key={r} className="tag region">{r.toUpperCase()}</span>
+                                      ))}
+                                    </div>
+                                  </td>
                                 </tr>
                               );
                             })}
@@ -511,7 +567,7 @@ export default function Dashboard() {
                   ) : (
                     <>
                       {(() => {
-                        const pipelines = extractPipelines(orchs, true);
+                        const pipelines = extractPipelines(filteredOrchs, true);
                         if (pipelines.length === 0) return null;
                         return (
                           <section className="pipeline-details">
@@ -549,10 +605,10 @@ export default function Dashboard() {
                       <div className="table-wrapper">
                         <table className="data-table orchestrators-table">
                           <thead>
-                            <tr><th>Address</th><th>URI</th><th>Version</th><th>Capabilities</th><th>Models</th><th>GPUs</th></tr>
+                            <tr><th>Address</th><th>URI</th><th>Version</th><th>Capabilities</th><th>Models</th><th>GPUs</th><th>Regions</th></tr>
                           </thead>
                           <tbody>
-                            {orchs.map((orch, i) => {
+                            {filteredOrchs.map((orch, i) => {
                               const capNames = getCapabilityNames(orch, activeGateway.capabilities_names || {}, [HEVC_ENCODE_CAP]);
                               const modelConstraints = getModelConstraints(orch);
                               const advertisedModels = getAdvertisedModels(orch);
@@ -595,6 +651,13 @@ export default function Dashboard() {
                                     )}
                                   </td>
                                   <td className="mono">{gpuCount}</td>
+                                  <td>
+                                    <div className="tag-list">
+                                      {(orch.regions || []).map(r => (
+                                        <span key={r} className="tag region">{r.toUpperCase()}</span>
+                                      ))}
+                                    </div>
+                                  </td>
                                 </tr>
                               );
                             })}
@@ -611,11 +674,11 @@ export default function Dashboard() {
                                 <tr>
                                   <th>Address</th><th>Pipeline</th><th>Model</th>
                                   <th>GPU ID</th><th>GPU Name</th><th>Compute</th>
-                                  <th>Memory Total</th><th>Memory Free</th>
+                                  <th>Memory Total</th><th>Memory Free</th><th>Regions</th>
                                 </tr>
                               </thead>
                               <tbody>
-                                {orchs.map((orch, oi) => {
+                                {filteredOrchs.map((orch, oi) => {
                                   const advertisedModels = getAdvertisedModels(orch);
                                   return (orch.hardware ?? []).map((hw, hi) => {
                                     if (advertisedModels.size > 0 && !advertisedModels.has(hw.model_id)) return null;
@@ -631,6 +694,13 @@ export default function Dashboard() {
                                         <td>{gpu.major}</td>
                                         <td>{formatBytes(gpu.memory_total)}</td>
                                         <td>{formatBytes(gpu.memory_free)}</td>
+                                        <td>
+                                          <div className="tag-list">
+                                            {(orch.regions || []).map(r => (
+                                              <span key={r} className="tag region">{r.toUpperCase()}</span>
+                                            ))}
+                                          </div>
+                                        </td>
                                       </tr>
                                     ));
                                   });
@@ -641,7 +711,7 @@ export default function Dashboard() {
                         </>
                       )}
 
-                      {orchs.some(o => o.capabilities_prices && o.capabilities_prices.length > 0) && (
+                      {filteredOrchs.some(o => o.capabilities_prices && o.capabilities_prices.length > 0) && (
                         <>
                           <h3>Capability Prices</h3>
                           <div className="table-wrapper">
@@ -650,7 +720,7 @@ export default function Dashboard() {
                                 <tr><th>Address</th><th>Capability</th><th>Constraint</th><th>Price Per Unit</th><th>Pixels Per Unit</th></tr>
                               </thead>
                               <tbody>
-                                {orchs.map((orch, oi) =>
+                                {filteredOrchs.map((orch, oi) =>
                                   (orch.capabilities_prices ?? []).map((price, pi) => (
                                     <tr key={`${oi}-${pi}`}>
                                       <td className="mono small" title={orch.address}>
@@ -670,7 +740,7 @@ export default function Dashboard() {
                       )}
 
                       {(() => {
-                        const caps = extractCapabilities(orchs, activeGateway.capabilities_names || {}, [HEVC_ENCODE_CAP]);
+                        const caps = extractCapabilities(filteredOrchs, activeGateway.capabilities_names || {}, [HEVC_ENCODE_CAP]);
                         if (caps.length === 0) return null;
                         return (
                           <section className="capabilities-section">
