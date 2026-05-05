@@ -251,11 +251,11 @@ function getLatestStatus(statuses: InstanceStatus[]): Record<string, InstanceSta
 }
 
 function StatusBadge({ status }: { status: string }) {
-  const color = status === 'ok' || status === 'complete' || status === 'downloaded' || status === 'started'
+  const color = status === 'ok' || status === 'complete' || status === 'downloaded' || status === 'started' || status === 'active'
     ? '#22c55e'
-    : status === 'error' || status === 'timeout'
+    : status === 'error' || status === 'timeout' || status === 'destroyed'
     ? '#ef4444'
-    : status === 'pending'
+    : status === 'pending' || status === 'installing'
     ? '#f59e0b'
     : '#94a3b8';
   return (
@@ -656,12 +656,12 @@ function AdminPortal({ user, onLogout }: { user: AuthUser; onLogout: () => void 
               </thead>
               <tbody>
                 {instances.map(i => (
-                  <tr key={i.id}>
+                  <tr key={i.id} className={i.status === 'destroyed' ? 'instance-destroyed' : ''}>
                     <td className="mono small">{i.vultr_instance_id}</td>
                     <td>{i.label}</td>
                     <td>{i.region_id}</td>
                     <td className="mono">{i.ip_address}</td>
-                    <td>{i.status}</td>
+                    <td><StatusBadge status={i.status} /></td>
                     <td>
                       {(() => {
                         const statuses = instanceStatuses[i.vultr_instance_id] || [];
@@ -682,7 +682,11 @@ function AdminPortal({ user, onLogout }: { user: AuthUser; onLogout: () => void 
                     </td>
                     <td>{i.last_seen_at ? new Date(i.last_seen_at).toLocaleString() : 'Never'}</td>
                     <td>
-                      <button className="detail-link" onClick={() => destroyInstance(i.vultr_instance_id)}>Destroy</button>
+                      {i.status === 'destroyed' ? (
+                        <span style={{ color: '#64748b', fontSize: '0.75rem' }}>Destroyed</span>
+                      ) : (
+                        <button className="detail-link" onClick={() => destroyInstance(i.vultr_instance_id)}>Destroy</button>
+                      )}
                     </td>
                   </tr>
                 ))}

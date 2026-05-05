@@ -237,10 +237,19 @@ def update_instance_status(instance_id: str, req: dict, db: Session = Depends(ge
         raise HTTPException(status_code=401, detail="Invalid worker token")
     instance = db.query(Instance).filter(Instance.instance_uuid == instance_id).first()
     if instance:
+        component = req.get("component", "unknown")
+        comp_status = req.get("status", "unknown")
+
+        # Transition instance status based on key lifecycle events
+        if component == "startup" and comp_status == "complete":
+            instance.status = "active"
+        elif comp_status == "error" and instance.status == "installing":
+            instance.status = "error"
+
         status = InstanceStatus(
             instance_id=instance.vultr_instance_id,
-            component=req.get("component", "unknown"),
-            status=req.get("status", "unknown"),
+            component=component,
+            status=comp_status,
             message=req.get("message")
         )
         db.add(status)
@@ -347,8 +356,17 @@ async def sync_instances(db: Session = Depends(get_db), user: User = Depends(get
                     status=vi.get("status", "unknown")
                 )
                 db.add(instance)
+
+        # Mark DB instances no longer in Vultr as "destroyed"
+        vultr_ids = {vi.get("id") for vi in vultr_instances}
+        destroyed = 0
+        for vid, inst in existing.items():
+            if vid not in vultr_ids and inst.status not in ("destroyed",):
+                inst.status = "destroyed"
+                destroyed += 1
+
         db.commit()
-        return {"ok": True, "count": len(vultr_instances)}
+        return {"ok": True, "count": len(vultr_instances), "destroyed": destroyed}
     except VultrAPIError as e:
         raise HTTPException(status_code=e.status_code, detail=str(e))
     except Exception as e:

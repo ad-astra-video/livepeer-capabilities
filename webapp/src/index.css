@@ -532,6 +532,15 @@ section h3 {
   background: #263449;
 }
 
+/* Destroyed instance row */
+.instance-destroyed {
+  opacity: 0.4;
+}
+
+.instance-destroyed:hover {
+  background: transparent !important;
+}
+
 .mono {
   font-family: 'SF Mono', Monaco, monospace;
   font-size: 0.8rem;
