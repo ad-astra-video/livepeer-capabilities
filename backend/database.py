@@ -76,6 +76,13 @@ class InstanceStatus(Base):
     message = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
+class WorkerLog(Base):
+    __tablename__ = "worker_logs"
+    id = Column(Integer, primary_key=True, index=True)
+    instance_id = Column(String, index=True)
+    log_text = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
 Base.metadata.create_all(bind=engine)
 
 def get_db():
