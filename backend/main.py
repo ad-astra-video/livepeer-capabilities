@@ -503,6 +503,12 @@ def health():
 # ─── Static Webapp (SPA catch-all) ───
 STATIC_DIR = "/app/static"
 
+@app.get("/static/agent.py")
+def serve_agent():
+    return FileResponse("/app/agent.py")
+
+
+
 @app.get("/{full_path:path}")
 async def serve_spa(full_path: str):
     if full_path.startswith("api/"):

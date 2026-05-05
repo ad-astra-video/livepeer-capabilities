@@ -34,7 +34,7 @@ services:
       - ./data/admin:/data
       - ./data/wallets:/data/wallets
       - ./backend/startup.sh:/app/startup.sh:ro
-      - ./worker/agent.py:/app/static/agent.py:ro
+      - ./worker/agent.py:/app/agent.py:ro
       - ./webapp/dist:/app/static:ro
     environment:
       - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}

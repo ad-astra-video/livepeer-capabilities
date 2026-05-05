@@ -35,6 +35,14 @@ interface JobRun {
   orch_count: number | null;
 }
 
+interface InstanceStatus {
+  component: string;
+  status: string;
+  message: string;
+  created_at: string;
+}
+
+
 export default function AdminRoute() {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
@@ -225,6 +233,44 @@ function ChangePassword({ onClose }: { onClose: () => void }) {
   );
 }
 
+function getLatestStatus(statuses: InstanceStatus[]): Record<string, InstanceStatus> {
+  const latest: Record<string, InstanceStatus> = {};
+  for (const s of statuses) {
+    const existing = latest[s.component];
+    if (!existing || new Date(s.created_at) > new Date(existing.created_at)) {
+      latest[s.component] = s;
+    }
+  }
+  return latest;
+}
+
+function StatusBadge({ status }: { status: string }) {
+  const color = status === 'ok' || status === 'complete' || status === 'downloaded' || status === 'started'
+    ? '#22c55e'
+    : status === 'error' || status === 'timeout'
+    ? '#ef4444'
+    : status === 'pending'
+    ? '#f59e0b'
+    : '#94a3b8';
+  return (
+    <span style={{
+      display: 'inline-block',
+      padding: '1px 6px',
+      borderRadius: '4px',
+      fontSize: '0.7rem',
+      fontWeight: 600,
+      background: color + '22',
+      color: color,
+      border: `1px solid ${color}44`,
+      marginRight: '4px',
+      marginBottom: '2px',
+      whiteSpace: 'nowrap'
+    }}>
+      {status}
+    </span>
+  );
+}
+
 function AdminPortal({ user, onLogout }: { user: AuthUser; onLogout: () => void }) {
   const [regions, setRegions] = useState<Region[]>([]);
   const [instances, setInstances] = useState<Instance[]>([]);
@@ -235,6 +281,7 @@ function AdminPortal({ user, onLogout }: { user: AuthUser; onLogout: () => void 
   const [vultrError, setVultrError] = useState('');
   const [selectedRegion, setSelectedRegion] = useState('');
   const [showChangePassword, setShowChangePassword] = useState(false);
+  const [instanceStatuses, setInstanceStatuses] = useState<Record<string, InstanceStatus[]>>({});
 
   // Fetch initial data once on mount
   useEffect(() => {
@@ -270,6 +317,29 @@ function AdminPortal({ user, onLogout }: { user: AuthUser; onLogout: () => void 
       }
     })();
   }, []);
+
+  // Poll instance statuses every 5 seconds
+  useEffect(() => {
+    const fetchStatuses = async () => {
+      const statuses: Record<string, InstanceStatus[]> = {};
+      for (const inst of instances) {
+        try {
+          const res = await fetch(`/api/instances/${inst.vultr_instance_id}/status`, { credentials: 'include' });
+          if (res.ok) {
+            const data = await res.json();
+            statuses[inst.vultr_instance_id] = data.statuses || [];
+          }
+        } catch (e) {
+          // ignore fetch errors for individual instances
+        }
+      }
+      setInstanceStatuses(statuses);
+    };
+
+    fetchStatuses();
+    const interval = setInterval(fetchStatuses, 5000);
+    return () => clearInterval(interval);
+  }, [instances]);
 
   const addRegion = async () => {
     if (!selectedRegion) return;
@@ -469,7 +539,7 @@ function AdminPortal({ user, onLogout }: { user: AuthUser; onLogout: () => void 
           <div className="table-wrapper">
             <table className="data-table">
               <thead>
-                <tr><th>ID</th><th>Label</th><th>Region</th><th>IP</th><th>Status</th><th>Last Seen</th><th>Action</th></tr>
+                <tr><th>ID</th><th>Label</th><th>Region</th><th>IP</th><th>Status</th><th>Worker Status</th><th>Last Seen</th><th>Action</th></tr>
               </thead>
               <tbody>
                 {instances.map(i => (
@@ -479,6 +549,24 @@ function AdminPortal({ user, onLogout }: { user: AuthUser; onLogout: () => void 
                     <td>{i.region_id}</td>
                     <td className="mono">{i.ip_address}</td>
                     <td>{i.status}</td>
+                    <td>
+                      {(() => {
+                        const statuses = instanceStatuses[i.vultr_instance_id] || [];
+                        const latest = getLatestStatus(statuses);
+                        const components = Object.values(latest).sort((a, b) => a.component.localeCompare(b.component));
+                        return components.length > 0 ? (
+                          <div style={{ display: 'flex', flexWrap: 'wrap', maxWidth: 220 }}>
+                            {components.map(s => (
+                              <span key={s.component} title={`${s.component}: ${s.message || s.status}`}>
+                                <StatusBadge status={s.status} />
+                              </span>
+                            ))}
+                          </div>
+                        ) : (
+                          <span style={{ color: '#64748b', fontSize: '0.8rem' }}>No status yet</span>
+                        );
+                      })()}
+                    </td>
                     <td>{i.last_seen_at ? new Date(i.last_seen_at).toLocaleString() : 'Never'}</td>
                     <td>
                       <button className="detail-link" onClick={() => destroyInstance(i.vultr_instance_id)}>Destroy</button>
