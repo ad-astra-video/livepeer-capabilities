@@ -34,21 +34,6 @@ app.add_middleware(
 
 WORKER_TOKEN = os.environ.get("WORKER_API_TOKEN", "worker-secret")
 
-async def wipe_instance_wallet(ip_address: str, instance_token: str) -> bool:
-    """Send wipe command to instance cleanup daemon. Returns True if wiped or unreachable."""
-    if not ip_address:
-        return True
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(
-                f"http://{ip_address}:9999/wipe",
-                json={"token": instance_token},
-                timeout=10.0
-            )
-            return resp.status_code == 200
-    except Exception:
-        return True
-
 @app.on_event("startup")
 def startup():
     import sqlite3
@@ -214,10 +199,6 @@ async def delete_instance(instance_id: str, db: Session = Depends(get_db), user:
     instance = db.query(Instance).filter(Instance.vultr_instance_id == instance_id).first()
     if not instance:
         raise HTTPException(status_code=404, detail="Instance not found")
-    try:
-        await wipe_instance_wallet(instance.ip_address, WORKER_TOKEN)
-    except Exception:
-        pass
     try:
         await vultr.delete_instance(instance_id)
     except Exception:
@@ -422,7 +403,7 @@ def get_aggregated_capabilities(db: Session = Depends(get_db)):
 
 # ─── Instance Completion (Worker-facing) ───
 @app.post("/api/instances/{instance_id}/complete")
-def complete_instance(instance_id: str, req: dict, db: Session = Depends(get_db)):
+async def complete_instance(instance_id: str, req: dict, db: Session = Depends(get_db)):
     if req.get("worker_token") != WORKER_TOKEN:
         raise HTTPException(status_code=401, detail="Invalid worker token")
     job = db.query(JobRun).filter(JobRun.instance_id == instance_id).first()
@@ -433,6 +414,16 @@ def complete_instance(instance_id: str, req: dict, db: Session = Depends(get_db)
     if instance:
         instance.status = "completed"
     db.commit()
+
+    # Destroy the Vultr instance — tmpfs wallet is wiped automatically when the VM is killed
+    if instance and instance.vultr_instance_id:
+        print(f"Instance {instance_id} complete — destroying Vultr instance {instance.vultr_instance_id} (wallet on tmpfs will be wiped)")
+        try:
+            await vultr.delete_instance(instance.vultr_instance_id)
+            print(f"Vultr instance {instance.vultr_instance_id} destroyed successfully")
+        except Exception as e:
+            print(f"WARNING: Vultr delete failed for {instance.vultr_instance_id}: {e}")
+
     return {"ok": True}
 
 # ─── Scheduled Jobs ───
