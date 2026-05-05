@@ -2,7 +2,8 @@ import os
 import json
 from fastapi import FastAPI, Depends, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi import Response
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
@@ -23,7 +24,7 @@ app = FastAPI(title="Livepeer Capabilities Admin API")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -56,15 +57,54 @@ class LoginRequest(BaseModel):
     password: str
 
 @app.post("/api/auth/login")
-def login(req: LoginRequest, db: Session = Depends(get_db)):
+def login(req: LoginRequest, response: Response, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.username == req.username).first()
     if not user or not verify_password(req.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid credentials")
-    return {"token": create_token(user.username), "user": {"username": user.username, "role": user.role}}
+    token = create_token(user.username, user.token_version)
+    response.set_cookie(
+        key="session",
+        value=token,
+        httponly=True,
+        secure=False,
+        samesite="lax",
+        max_age=60 * 60 * 24 * 7
+    )
+    return {"user": {"username": user.username, "role": user.role}}
 
 @app.get("/api/auth/me")
 def me(user: User = Depends(get_current_user)):
     return {"username": user.username, "role": user.role}
+
+@app.post("/api/auth/logout")
+def logout(response: Response):
+    response.delete_cookie(key="session")
+    return {"ok": True}
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+@app.post("/api/auth/change-password")
+def change_password(req: ChangePasswordRequest, response: Response, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    if not verify_password(req.current_password, user.password_hash):
+        raise HTTPException(status_code=401, detail="Current password is incorrect")
+    if len(req.new_password) < 6:
+        raise HTTPException(status_code=400, detail="New password must be at least 6 characters")
+    user.password_hash = hash_password(req.new_password)
+    user.token_version += 1
+    db.commit()
+    db.refresh(user)
+    token = create_token(user.username, user.token_version)
+    response.set_cookie(
+        key="session",
+        value=token,
+        httponly=True,
+        secure=False,
+        samesite="lax",
+        max_age=60 * 60 * 24 * 7
+    )
+    return {"ok": True, "message": "Password updated successfully"}
 
 # ─── Region Routes ───
 class RegionCreate(BaseModel):
@@ -407,3 +447,16 @@ def trigger_jobs(user: User = Depends(get_current_user)):
 @app.get("/api/health")
 def health():
     return {"status": "ok"}
+
+
+# ─── Static Webapp (SPA catch-all) ───
+STATIC_DIR = "/app/static"
+
+@app.get("/{full_path:path}")
+async def serve_spa(full_path: str):
+    if full_path.startswith("api/"):
+        raise HTTPException(status_code=404)
+    file_path = os.path.join(STATIC_DIR, full_path)
+    if os.path.isfile(file_path):
+        return FileResponse(file_path)
+    return FileResponse(os.path.join(STATIC_DIR, "index.html"))
