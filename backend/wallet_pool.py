@@ -15,7 +15,7 @@ def _ensure_pool_dir():
 
 def _parse_address_from_filename(fname: str) -> Optional[str]:
     """Extract Ethereum address from filename like '0xABC...json'."""
-    name = fname.replace(".json", "").replace(".used", "")
+    name = fname.replace(".address", "").replace(".used", "")
     if re.match(r"^0x[a-fA-F0-9]{40}$", name):
         return name.lower()
     return None
@@ -34,7 +34,7 @@ def list_available_wallets() -> list:
     _ensure_pool_dir()
     wallets = []
     for fname in sorted(os.listdir(WALLET_POOL_DIR)):
-        if fname.endswith(".json") and not fname.endswith(".used.json"):
+        if fname.endswith(".address") and not fname.endswith(".used.address"):
             fpath = os.path.join(WALLET_POOL_DIR, fname)
             wallets.append(fpath)
     return wallets
@@ -48,7 +48,7 @@ def acquire_wallet() -> Optional[Dict[str, Any]]:
         address = _parse_address_from_filename(fname)
         if address:
             # Mark as used by renaming
-            used_path = fpath.replace(".json", ".used.json")
+            used_path = fpath.replace(".address", ".used.address")
             try:
                 os.rename(fpath, used_path)
                 return {
@@ -78,7 +78,7 @@ def get_or_create_wallet() -> Dict[str, Any]:
         return wallet
     raise RuntimeError(
         "Wallet pool is empty. Create marker files in "
-        f"'{WALLET_POOL_DIR}' named '0x<address>.json' (can be blank). "
+        f"'{WALLET_POOL_DIR}' named '0x<address>.address' (can be blank). "
         "Upload keystore to S3 at 'wallets/keystore/0x<address>.json' and "
         "password to 'wallets/password/0x<address>.password'. "
         "See data/wallets/README.md for setup instructions."

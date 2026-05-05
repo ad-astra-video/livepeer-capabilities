@@ -4,7 +4,7 @@ Upload keystore and password to S3 as separate objects.
 
 This is a standalone convenience tool. The backend discovers wallets by
 looking for marker files in its local pool directory (default: /data/wallets/)
-named '0x<address>.json'. These marker files can be blank — only the filename
+named '0x<address>.address'. These marker files can be blank — only the filename
 matters.
 
 Naming convention in S3:
@@ -74,9 +74,9 @@ def upload_object(object_key: str, body: bytes, content_type: str = "application
 
 
 def create_marker(address: str, marker_dir: str):
-    """Create a blank marker file named 0x<address>.json in the pool directory."""
+    """Create a blank marker file named 0x<address>.address in the pool directory."""
     os.makedirs(marker_dir, exist_ok=True)
-    fpath = os.path.join(marker_dir, f"{address.lower()}.json")
+    fpath = os.path.join(marker_dir, f"{address.lower()}.address")
     if os.path.exists(fpath):
         print(f"  Marker already exists: {fpath}")
     else:

@@ -8,9 +8,9 @@ Wallets live **only in S3** — the backend server never stores keystore or pass
 Backend (local markers)          S3 Bucket (actual secrets)
   |                                |
   data/wallets/                    wallets/
-    0xABC...json   ---------->     keystore/
-    0xDEF...json                   0xABC...json
-    0xGHI...json   ---------->     password/
+    0xABC...address   ---------->     keystore/
+    0xDEF...address                   0xABC...json
+    0xGHI...address   ---------->     password/
                                    0xABC...password
 ```
 
@@ -83,7 +83,7 @@ aws s3 cp my-password.txt \
   --sse AES256
 
 # Create marker file on backend
-touch /data/wallets/0x68d6ff3938ff63d2df16567cb8ca9772e14496f7.json
+touch /data/wallets/0x68d6ff3938ff63d2df16567cb8ca9772e14496f7.address
 ```
 
 **Option D: Using the Vultr web UI**
@@ -109,7 +109,7 @@ ls /data/wallets/
 Backend                          S3 Bucket                        Vultr Instance
   |                                 |                                   |
   |-- 1. list marker files -------->|                                   |
-  |   (0x<address>.json)            |                                   |
+  |   (0x<address>.address)         |                                   |
   |                                 |                                   |
   |-- 2. pick available marker ---->|                                   |
   |                                 |                                   |
@@ -171,13 +171,13 @@ Marker files are **blank text files** on the backend filesystem. Only the filena
 
 ```bash
 # Create a marker for address 0x68d6ff3938ff63d2df16567cb8ca9772e14496f7
-touch /data/wallets/0x68d6ff3938ff63d2df16567cb8ca9772e14496f7.json
+touch /data/wallets/0x68d6ff3938ff63d2df16567cb8ca9772e14496f7.address
 ```
 
 When a wallet is allocated to an instance, the marker is renamed to `.used.json`:
 ```
-0x68d6ff3938ff63d2df16567cb8ca9772e14496f7.json
-  -> 0x68d6ff3938ff63d2df16567cb8ca9772e14496f7.used.json
+0x68d6ff3938ff63d2df16567cb8ca9772e14496f7.address
+  -> 0x68d6ff3938ff63d2df16567cb8ca9772e14496f7.used.address
 ```
 
 This prevents double-allocation. When the instance is destroyed, the used marker is deleted.

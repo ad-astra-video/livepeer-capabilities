@@ -10,7 +10,8 @@ webapp/dist/
 # Data directories (runtime state, wallets, databases)
 data/admin/
 data/gateway-*/
-data/wallets/*.json
+data/wallets/*.address
+data/wallets/*.used.address
 data/wallets/*.password
 !data/wallets/README.md
 !data/wallets/encrypt_wallets.py
