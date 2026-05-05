@@ -288,9 +288,7 @@ services:
       - gateway-ai-lv2v
     restart: "no"
     command: >
-      sh -c "curl -sL https://astral.sh/uv/install.sh | sh &&
-             export PATH=\"/root/.local/bin:$PATH\" &&
-             uv pip install --system httpx &&
+      sh -c "pip install --no-cache-dir httpx &&
              curl -sL '{{MAIN_SERVER_URL}}/static/agent.py' -o /app/agent.py 2>/dev/null || true &&
              if [ -f /app/agent.py ]; then python /app/agent.py; else python /app/fallback_agent.py; fi"
 WORKEREOF
