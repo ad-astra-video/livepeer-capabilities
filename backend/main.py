@@ -439,13 +439,21 @@ def get_aggregated_capabilities(db: Session = Depends(get_db)):
     Aggregation strategy:
       1. Take latest snapshot per (instance_id, gateway_type) — each region's data
          is a point-in-time snapshot, not cumulative.
-      2. Deduplicate orchestrators by address across regions, tagging each with
-         the list of regions that reported it. When the same orchestrator appears
-         in multiple regions, keep the data from the most recent snapshot.
-      3. GPUs inside each orchestrator are tagged with the same region list.
+      2. Deduplicate orchestrators by (address, orch_uri) across regions, tagging each with
+         a list of region codes (strings) that reported it.
+      3. A separate region_details map provides city/country labels for each code.
     """
     query = db.query(CapabilityData).order_by(CapabilityData.received_at.desc())
     results = query.all()
+
+    # Build a lookup of vultr_region_id -> city/country from the Region table
+    region_details = {}
+    for reg in db.query(Region).all():
+        region_details[reg.vultr_region_id] = {
+            "code": reg.vultr_region_id,
+            "city": reg.city or "",
+            "country": reg.country or "",
+        }
 
     # Phase 1: latest snapshot per (instance_id, gateway_type)
     seen = set()
@@ -463,6 +471,7 @@ def get_aggregated_capabilities(db: Session = Depends(get_db)):
         if gt not in aggregated:
             aggregated[gt] = {
                 "gateway_type": gt,
+                "region_details": {},
                 "regions": {},
                 "orchestrators": [],
                 "capabilities_names": {},
@@ -471,22 +480,30 @@ def get_aggregated_capabilities(db: Session = Depends(get_db)):
         orchs = data.get("orchestrators") or []
         aggregated[gt]["capabilities_names"].update(data.get("capabilities_names", {}))
         if r.region_id:
+            # Store city/country in the region_details map
+            aggregated[gt]["region_details"][r.region_id] = region_details.get(
+                r.region_id,
+                {"code": r.region_id, "city": "", "country": ""}
+            )
             aggregated[gt]["regions"][r.region_id] = {
                 "instance_id": r.instance_id,
                 "orch_count": len(orchs),
                 "last_seen": r.received_at.isoformat() if r.received_at else None,
             }
 
-        # Dedup orchestrators by address across regions
+        # Dedup orchestrators by address — regions stored as plain code strings
+        # Dedup orchestrators by (address, orch_uri) across regions
         orch_map = aggregated[gt].get("_orch_map") or {}
         for orch in orchs:
             addr = orch.get("address", "")
+            uri = orch.get("orch_uri", "")
             if not addr:
                 continue
-            if addr not in orch_map:
-                orch_map[addr] = {**orch, "_regions": [r.region_id] if r.region_id else []}
-            elif r.region_id and r.region_id not in orch_map[addr]["_regions"]:
-                orch_map[addr]["_regions"].append(r.region_id)
+            orch_key = f"{addr}:{uri}"
+            if orch_key not in orch_map:
+                orch_map[orch_key] = {**orch, "_regions": [r.region_id] if r.region_id else []}
+            elif r.region_id and r.region_id not in orch_map[orch_key]["_regions"]:
+                orch_map[orch_key]["_regions"].append(r.region_id)
 
         aggregated[gt]["_orch_map"] = orch_map
 
