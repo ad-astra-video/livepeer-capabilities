@@ -135,3 +135,29 @@ def cleanup_s3_wallet(s3_keystore_key: str, s3_password_key: str = None):
         delete_object(s3_keystore_key)
     if s3_password_key:
         delete_object(s3_password_key)
+
+
+def create_wallet_marker(address: str, subfolder: str = None) -> str:
+    """Create a blank marker file for the given Ethereum address.
+
+    Returns the full path to the created marker file.
+    Raises ValueError if the address is invalid or the marker already exists.
+    """
+    address = address.strip().lower()
+    if not re.match(r"^0x[a-fA-F0-9]{40}$", address):
+        raise ValueError("Invalid Ethereum address format. Expected 0x followed by 40 hex chars.")
+
+    _ensure_pool_dir()
+    target_dir = WALLET_POOL_DIR
+    if subfolder:
+        target_dir = os.path.join(WALLET_POOL_DIR, subfolder.strip())
+        os.makedirs(target_dir, exist_ok=True)
+
+    fpath = os.path.join(target_dir, f"{address}.address")
+    if os.path.exists(fpath):
+        raise ValueError(f"Wallet marker already exists: {fpath}")
+
+    with open(fpath, "w") as f:
+        pass  # blank file
+
+    return fpath

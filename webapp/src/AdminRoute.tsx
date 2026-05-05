@@ -42,6 +42,12 @@ interface InstanceStatus {
   created_at: string;
 }
 
+interface Wallet {
+  address: string;
+  path: string;
+  subfolder: string | null;
+}
+
 
 export default function AdminRoute() {
   const [user, setUser] = useState<AuthUser | null>(null);
@@ -283,18 +289,28 @@ function AdminPortal({ user, onLogout }: { user: AuthUser; onLogout: () => void 
   const [showChangePassword, setShowChangePassword] = useState(false);
   const [instanceStatuses, setInstanceStatuses] = useState<Record<string, InstanceStatus[]>>({});
 
+  // Wallet state
+  const [wallets, setWallets] = useState<Wallet[]>([]);
+  const [walletAddress, setWalletAddress] = useState('');
+  const [walletSubfolder, setWalletSubfolder] = useState('');
+
   // Fetch initial data once on mount
   useEffect(() => {
     (async () => {
       try {
-        const [rRes, iRes, jRes] = await Promise.all([
+        const [rRes, iRes, jRes, wRes] = await Promise.all([
           fetch('/api/regions', { credentials: 'include' }),
           fetch('/api/instances', { credentials: 'include' }),
-          fetch('/api/jobs', { credentials: 'include' })
+          fetch('/api/jobs', { credentials: 'include' }),
+          fetch('/api/wallets', { credentials: 'include' })
         ]);
         if (rRes.ok) setRegions(await rRes.json());
         if (iRes.ok) setInstances(await iRes.json());
         if (jRes.ok) setJobs(await jRes.json());
+        if (wRes.ok) {
+          const wData = await wRes.json();
+          setWallets(wData.wallets || []);
+        }
       } catch (e) {
         console.error(e);
       }
@@ -457,6 +473,50 @@ function AdminPortal({ user, onLogout }: { user: AuthUser; onLogout: () => void 
     setLoading(false);
   };
 
+  // Wallet handlers
+  const fetchWallets = async () => {
+    try {
+      const res = await fetch('/api/wallets', { credentials: 'include' });
+      if (res.ok) {
+        const data = await res.json();
+        setWallets(data.wallets || []);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const addWallet = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setMessage('');
+    setVultrError('');
+    if (!walletAddress.trim()) return;
+    setLoading(true);
+    try {
+      const res = await fetch('/api/wallets', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          address: walletAddress.trim(),
+          subfolder: walletSubfolder.trim() || null
+        })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setMessage(`Wallet marker created: ${data.address}`);
+        setWalletAddress('');
+        setWalletSubfolder('');
+        await fetchWallets();
+      } else {
+        setVultrError(data.detail || 'Failed to create wallet marker');
+      }
+    } catch (e) {
+      setMessage('Error creating wallet marker');
+    }
+    setLoading(false);
+  };
+
   return (
     <div className="app">
       <header>
@@ -492,6 +552,47 @@ function AdminPortal({ user, onLogout }: { user: AuthUser; onLogout: () => void 
                     <td>{j.status}</td>
                     <td>{new Date(j.started_at).toLocaleString()}</td>
                     <td>{j.completed_at ? new Date(j.completed_at).toLocaleString() : '\u2014'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section>
+          <h3>Wallets</h3>
+          <form onSubmit={addWallet} className="admin-form" style={{gap: 8, flexWrap: 'wrap'}}>
+            <input
+              type="text"
+              placeholder="0x... Ethereum address"
+              value={walletAddress}
+              onChange={e => setWalletAddress(e.target.value)}
+              style={{ minWidth: 320 }}
+              required
+            />
+            <input
+              type="text"
+              placeholder="Subfolder (optional)"
+              value={walletSubfolder}
+              onChange={e => setWalletSubfolder(e.target.value)}
+              style={{ minWidth: 160 }}
+            />
+            <button type="submit" disabled={loading}>Add Wallet Marker</button>
+          </form>
+          <div className="table-wrapper">
+            <table className="data-table">
+              <thead>
+                <tr><th>Address</th><th>Subfolder</th><th>Path</th></tr>
+              </thead>
+              <tbody>
+                {wallets.length === 0 && (
+                  <tr><td colSpan={3} style={{ color: '#64748b', textAlign: 'center' }}>No wallet markers found</td></tr>
+                )}
+                {wallets.map((w, idx) => (
+                  <tr key={idx}>
+                    <td className="mono small">{w.address}</td>
+                    <td>{w.subfolder || '\u2014'}</td>
+                    <td className="mono small" style={{ fontSize: '0.75rem' }}>{w.path}</td>
                   </tr>
                 ))}
               </tbody>

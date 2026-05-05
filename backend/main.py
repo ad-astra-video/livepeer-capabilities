@@ -17,7 +17,7 @@ from auth import (
 from vultr_client import vultr, VultrAPIError
 from wallet_pool import (
     get_or_create_wallet, release_wallet, prepare_wallet_for_instance,
-    cleanup_s3_wallet, list_available_wallets
+    cleanup_s3_wallet, list_available_wallets, create_wallet_marker, WALLET_POOL_DIR
 )
 import uuid
 import httpx
@@ -65,7 +65,7 @@ def startup():
     db = next(get_db())
     init_admin_user(db)
 
-    available = list_available_wallets()
+    available = list_available_wallets, create_wallet_marker, WALLET_POOL_DIR()
     if not available:
         print("WARNING: No wallet markers found. Gateway instances will fail to spawn. "
               "Create .address marker files in the wallet pool directory.")
@@ -324,6 +324,35 @@ async def sync_instances(db: Session = Depends(get_db), user: User = Depends(get
         raise HTTPException(status_code=429, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+# ─── Wallet Management ───
+class WalletCreate(BaseModel):
+    address: str
+    subfolder: Optional[str] = None
+
+@app.get("/api/wallets")
+def list_wallets(user: User = Depends(get_current_user)):
+    """List all wallet marker files in the pool."""
+    wallets = []
+    for fpath in list_available_wallets():
+        fname = os.path.basename(fpath)
+        dir_name = os.path.basename(os.path.dirname(fpath))
+        subfolder = dir_name if dir_name != os.path.basename(WALLET_POOL_DIR) else None
+        address = fname.replace(".address", "")
+        wallets.append({"address": address, "path": fpath, "subfolder": subfolder})
+    return {"wallets": wallets}
+
+@app.post("/api/wallets")
+def add_wallet(req: WalletCreate, user: User = Depends(get_current_user)):
+    """Create a new wallet marker file."""
+    try:
+        fpath = create_wallet_marker(req.address, req.subfolder)
+        return {"ok": True, "path": fpath, "address": req.address.strip().lower()}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 # ─── Capability Data (Worker-facing) ───
 class CapabilitySubmit(BaseModel):
