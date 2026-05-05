@@ -10,6 +10,13 @@ def migrate():
     cursor.execute("PRAGMA table_info(instances)")
     columns = [col[1] for col in cursor.fetchall()]
     
+    cursor.execute("PRAGMA table_info(users)")
+    user_columns = [col[1] for col in cursor.fetchall()]
+    
+    if "token_version" not in user_columns:
+        cursor.execute("ALTER TABLE users ADD COLUMN token_version INTEGER DEFAULT 0")
+        print("Added token_version column to users")
+    
     # Add new columns if missing
     if "wallet_address" not in columns:
         cursor.execute("ALTER TABLE instances ADD COLUMN wallet_address TEXT")

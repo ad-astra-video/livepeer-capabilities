@@ -17,6 +17,7 @@ class User(Base):
     username = Column(String, unique=True, index=True)
     password_hash = Column(String)
     role = Column(String, default="admin")
+    token_version = Column(Integer, default=0)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 class Region(Base):
