@@ -1,0 +1,13 @@
+# Ignore everything by default
+**
+
+# Allow backend source
+!backend/
+!backend/**
+
+# Allow webapp source for build stage
+!webapp/
+!webapp/**
+
+# Allow worker agent script
+!worker/agent.py
