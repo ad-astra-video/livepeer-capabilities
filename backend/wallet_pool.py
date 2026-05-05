@@ -8,14 +8,19 @@ WALLET_POOL_DIR = os.environ.get("WALLET_POOL_DIR", "/data/wallets")
 KEYSTORE_PREFIX = "wallets/keystore/"
 PASSWORD_PREFIX = "wallets/password/"
 
+# In-memory tracking of allocated wallet marker paths.
+# Restarting the backend resets this; the database remains the source of truth
+# for which wallet is assigned to a running instance.
+_allocated: set = set()
+
 
 def _ensure_pool_dir():
     os.makedirs(WALLET_POOL_DIR, exist_ok=True)
 
 
 def _parse_address_from_filename(fname: str) -> Optional[str]:
-    """Extract Ethereum address from filename like '0xABC...json'."""
-    name = fname.replace(".address", "").replace(".used", "")
+    """Extract Ethereum address from filename like '0xABC...address'."""
+    name = fname.replace(".address", "")
     if re.match(r"^0x[a-fA-F0-9]{40}$", name):
         return name.lower()
     return None
@@ -29,46 +34,63 @@ def _password_key_for_address(address: str) -> str:
     return f"{PASSWORD_PREFIX}{address.lower()}.password"
 
 
+def _list_marker_files(directory: str) -> list:
+    """Return full paths to .address marker files in a directory."""
+    markers = []
+    if not os.path.isdir(directory):
+        return markers
+    for fname in sorted(os.listdir(directory)):
+        if fname.endswith(".address"):
+            fpath = os.path.join(directory, fname)
+            if os.path.isfile(fpath):
+                markers.append(fpath)
+    return markers
+
+
 def list_available_wallets() -> list:
-    """Return list of available wallet marker files from local pool."""
+    """Return list of available wallet marker files from local pool.
+
+    Supports two layouts:
+      - Flat:     WALLET_POOL_DIR/0x<address>.address
+      - Subdirs:  WALLET_POOL_DIR/<subfolder>/0x<address>.address
+    """
     _ensure_pool_dir()
     wallets = []
-    for fname in sorted(os.listdir(WALLET_POOL_DIR)):
-        if fname.endswith(".address") and not fname.endswith(".used.address"):
-            fpath = os.path.join(WALLET_POOL_DIR, fname)
-            wallets.append(fpath)
-    return wallets
+
+    # Flat layout
+    wallets.extend(_list_marker_files(WALLET_POOL_DIR))
+
+    # Subfolder layout (transcoding, ai-batch, lv2v, etc.)
+    for entry in sorted(os.listdir(WALLET_POOL_DIR)):
+        subdir = os.path.join(WALLET_POOL_DIR, entry)
+        if os.path.isdir(subdir):
+            wallets.extend(_list_marker_files(subdir))
+
+    # Exclude currently allocated wallets
+    return [w for w in wallets if w not in _allocated]
 
 
 def acquire_wallet() -> Optional[Dict[str, Any]]:
-    """Pick an available wallet marker and mark it used. Returns None if pool empty."""
+    """Pick an available wallet marker. Returns None if pool empty."""
     available = list_available_wallets()
     for fpath in available:
         fname = os.path.basename(fpath)
         address = _parse_address_from_filename(fname)
         if address:
-            # Mark as used by renaming
-            used_path = fpath.replace(".address", ".used.address")
-            try:
-                os.rename(fpath, used_path)
-                return {
-                    "address": address,
-                    "source_path": used_path,
-                    "s3_keystore_key": _keystore_key_for_address(address),
-                    "s3_password_key": _password_key_for_address(address),
-                }
-            except Exception:
-                continue
+            _allocated.add(fpath)
+            return {
+                "address": address,
+                "source_path": fpath,
+                "s3_keystore_key": _keystore_key_for_address(address),
+                "s3_password_key": _password_key_for_address(address),
+            }
     return None
 
 
 def release_wallet(wallet_source_path: str):
-    """Delete the used marker file from pool."""
-    if wallet_source_path and os.path.exists(wallet_source_path):
-        try:
-            os.remove(wallet_source_path)
-        except Exception:
-            pass
+    """Release a wallet back to the available pool."""
+    if wallet_source_path:
+        _allocated.discard(wallet_source_path)
 
 
 def get_or_create_wallet() -> Dict[str, Any]:
@@ -79,6 +101,7 @@ def get_or_create_wallet() -> Dict[str, Any]:
     raise RuntimeError(
         "Wallet pool is empty. Create marker files in "
         f"'{WALLET_POOL_DIR}' named '0x<address>.address' (can be blank). "
+        "Sub-folders (e.g., transcoding/, ai-batch/, lv2v/) are supported. "
         "Upload keystore to S3 at 'wallets/keystore/0x<address>.json' and "
         "password to 'wallets/password/0x<address>.password'. "
         "See data/wallets/README.md for setup instructions."

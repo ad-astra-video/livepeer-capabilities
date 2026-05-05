@@ -25,6 +25,9 @@ Usage:
 
     # Upload from a combined JSON (splits automatically)
     python upload_to_s3.py my-wallet.json --marker /data/wallets/
+
+    # Create marker in a subfolder (transcoding, ai-batch, lv2v, etc.)
+    python upload_to_s3.py my-keystore.json my-password.txt --marker /data/wallets/ --subfolder transcoding
 """
 
 import os
@@ -73,8 +76,10 @@ def upload_object(object_key: str, body: bytes, content_type: str = "application
     print(f"  s3://{S3_BUCKET}/{object_key}")
 
 
-def create_marker(address: str, marker_dir: str):
+def create_marker(address: str, marker_dir: str, subfolder: str = None):
     """Create a blank marker file named 0x<address>.address in the pool directory."""
+    if subfolder:
+        marker_dir = os.path.join(marker_dir, subfolder)
     os.makedirs(marker_dir, exist_ok=True)
     fpath = os.path.join(marker_dir, f"{address.lower()}.address")
     if os.path.exists(fpath):
@@ -85,7 +90,7 @@ def create_marker(address: str, marker_dir: str):
         print(f"  Created marker: {fpath}")
 
 
-def upload_from_combined(fpath: str, marker_dir: str = None):
+def upload_from_combined(fpath: str, marker_dir: str = None, subfolder: str = None):
     """Upload from a combined JSON file containing keystore + password."""
     with open(fpath, "r") as f:
         data = json.load(f)
@@ -114,12 +119,12 @@ def upload_from_combined(fpath: str, marker_dir: str = None):
     upload_object(password_key, password.encode("utf-8"), "text/plain")
 
     if marker_dir:
-        create_marker(address, marker_dir)
+        create_marker(address, marker_dir, subfolder)
 
     print("Done.")
 
 
-def upload_separate(keystore_path: str, password_path: str, marker_dir: str = None):
+def upload_separate(keystore_path: str, password_path: str, marker_dir: str = None, subfolder: str = None):
     """Upload separate keystore JSON and password files."""
     with open(keystore_path, "r") as f:
         keystore = json.load(f)
@@ -146,7 +151,7 @@ def upload_separate(keystore_path: str, password_path: str, marker_dir: str = No
     upload_object(password_key, password.encode("utf-8"), "text/plain")
 
     if marker_dir:
-        create_marker(address, marker_dir)
+        create_marker(address, marker_dir, subfolder)
 
     print("Done.")
 
@@ -155,12 +160,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Upload wallet keystore and password to S3")
     parser.add_argument("files", nargs="+", help="Combined JSON, or keystore + password files")
     parser.add_argument("--marker", "-m", help="Directory to create blank marker file (e.g., /data/wallets/)")
+    parser.add_argument("--subfolder", "-s", help="Subfolder under marker dir (e.g., transcoding, ai-batch, lv2v)")
     args = parser.parse_args()
 
     if len(args.files) == 1:
-        upload_from_combined(args.files[0], args.marker)
+        upload_from_combined(args.files[0], args.marker, args.subfolder)
     elif len(args.files) == 2:
-        upload_separate(args.files[0], args.files[1], args.marker)
+        upload_separate(args.files[0], args.files[1], args.marker, args.subfolder)
     else:
         parser.print_help()
         sys.exit(1)

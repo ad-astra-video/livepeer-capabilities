@@ -15,7 +15,10 @@ from auth import (
     verify_password, create_token, decode_token
 )
 from vultr_client import vultr, VultrAPIError
-from wallet_pool import get_or_create_wallet, release_wallet, prepare_wallet_for_instance, cleanup_s3_wallet
+from wallet_pool import (
+    get_or_create_wallet, release_wallet, prepare_wallet_for_instance,
+    cleanup_s3_wallet, list_available_wallets
+)
 import uuid
 import httpx
 
@@ -61,6 +64,11 @@ def startup():
     conn.close()
     db = next(get_db())
     init_admin_user(db)
+
+    available = list_available_wallets()
+    if not available:
+        print("WARNING: No wallet markers found. Gateway instances will fail to spawn. "
+              "Create .address marker files in the wallet pool directory.")
 
 # ─── Auth Routes ───
 class LoginRequest(BaseModel):

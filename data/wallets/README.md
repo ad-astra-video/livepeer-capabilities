@@ -10,11 +10,13 @@ Backend (local markers)          S3 Bucket (actual secrets)
   data/wallets/                    wallets/
     0xABC...address   ---------->     keystore/
     0xDEF...address                   0xABC...json
-    0xGHI...address   ---------->     password/
-                                   0xABC...password
+    transcoding/      ---------->     password/
+      0xGHI...address              0xABC...password
+    ai-batch/
+      0xJKL...address
 ```
 
-- **Marker files** on backend: blank files named `0x<address>.json`. The filename is the only thing that matters.
+- **Marker files** on backend: blank files named `0x<address>.address`. The filename is the only thing that matters.
 - **Keystore** in S3: `wallets/keystore/0x<address>.json` — the actual encrypted keystore JSON.
 - **Password** in S3: `wallets/password/0x<address>.password` — plain text password file.
 
@@ -50,6 +52,32 @@ S3_URL_EXPIRY_SECONDS=600
 4. Generate **S3 credentials** (Access Key + Secret Key)
 5. Add to `.env`
 
+## Marker File Layout
+
+The backend supports two layouts for marker files:
+
+### Flat layout (one wallet pool)
+
+```
+/data/wallets/
+  0x68d6ff3938ff63d2df16567cb8ca9772e14496f7.address
+  0xaabbccdd...address
+```
+
+### Subfolder layout (per-pipeline wallets)
+
+```
+/data/wallets/
+  transcoding/
+    0x68d6ff3938ff63d2df16567cb8ca9772e14496f7.address
+  ai-batch/
+    0xaabbccdd...address
+  lv2v/
+    0x11223344...address
+```
+
+Any subfolder name is accepted. The backend scans all subdirectories for `.address` marker files.
+
 ## Setting Up a Wallet
 
 ### Step 1: Upload keystore and password to S3
@@ -69,6 +97,13 @@ python data/wallets/upload_to_s3.py my-wallet.json --marker /data/wallets/
 python data/wallets/upload_to_s3.py my-keystore.json my-password.txt --marker /data/wallets/
 ```
 
+**Create marker in a subfolder:**
+
+```bash
+python data/wallets/upload_to_s3.py my-keystore.json my-password.txt \
+  --marker /data/wallets/ --subfolder transcoding
+```
+
 **Option C: Using AWS CLI / s3cmd directly**
 
 ```bash
@@ -84,6 +119,10 @@ aws s3 cp my-password.txt \
 
 # Create marker file on backend
 touch /data/wallets/0x68d6ff3938ff63d2df16567cb8ca9772e14496f7.address
+
+# Or in a subfolder
+mkdir -p /data/wallets/transcoding
+touch /data/wallets/transcoding/0x68d6ff3938ff63d2df16567cb8ca9772e14496f7.address
 ```
 
 **Option D: Using the Vultr web UI**
@@ -110,8 +149,10 @@ Backend                          S3 Bucket                        Vultr Instance
   |                                 |                                   |
   |-- 1. list marker files -------->|                                   |
   |   (0x<address>.address)         |                                   |
+  |   from flat + subfolders        |                                   |
   |                                 |                                   |
   |-- 2. pick available marker ---->|                                   |
+  |   (tracked in memory)           |                                   |
   |                                 |                                   |
   |-- 3. generate pre-signed URLs --|                                   |
   |   (keystore + password)         |                                   |
@@ -140,7 +181,16 @@ Backend                          Vultr Instance
   |-- 2. destroy instance --------->|
   |                                 |
   |-- 3. delete S3 objects (if any) |
+  |-- 4. release wallet marker      |
 ```
+
+## Wallet Allocation
+
+Wallets are allocated using an **in-memory set** tracking which marker paths are currently checked out. This means:
+
+- No file renaming or `.used` suffixes — marker files stay static
+- A backend restart clears the in-memory set; existing instances remain tracked in the database
+- If a wallet is allocated but instance creation fails, `release_wallet()` immediately returns it to the pool
 
 ## Wallet File Formats
 
@@ -172,15 +222,10 @@ Marker files are **blank text files** on the backend filesystem. Only the filena
 ```bash
 # Create a marker for address 0x68d6ff3938ff63d2df16567cb8ca9772e14496f7
 touch /data/wallets/0x68d6ff3938ff63d2df16567cb8ca9772e14496f7.address
-```
 
-When a wallet is allocated to an instance, the marker is renamed to `.used.json`:
+# Create a marker in a subfolder
+touch /data/wallets/transcoding/0x68d6ff3938ff63d2df16567cb8ca9772e14496f7.address
 ```
-0x68d6ff3938ff63d2df16567cb8ca9772e14496f7.address
-  -> 0x68d6ff3938ff63d2df16567cb8ca9772e14496f7.used.address
-```
-
-This prevents double-allocation. When the instance is destroyed, the used marker is deleted.
 
 ## Encryption at Rest
 
@@ -195,7 +240,7 @@ If you need stronger control, enable **SSE-KMS** on your bucket or use your clou
 ## Security Features
 
 1. **No wallet secrets on backend disk** — only blank marker files
-2. **Separate keystore and password** — two S3 objects, two URLs, two downloads
+2. **No combined secrets anywhere** — keystore and password are separate S3 objects
 3. **Backend never sees wallet content** — only parses address from marker filename
 4. **Private S3 bucket** — public access is blocked
 5. **SSE-S3 encryption** — AES-256 at rest for both objects

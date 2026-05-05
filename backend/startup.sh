@@ -29,7 +29,10 @@ report_status "apt" "ok" "Dependencies installed"
 
 # Install Docker
 curl -fsSL https://get.docker.com | sh
-usermod -aG docker ubuntu || true
+# Vultr images may use 'root' or another default user; only add 'ubuntu' if it exists
+if id ubuntu &>/dev/null; then
+    usermod -aG docker ubuntu
+fi
 report_status "docker" "ok" "Docker installed"
 
 # Create persistent data directories (for gateway state, NOT wallet)
@@ -51,32 +54,64 @@ report_status "tmpfs" "ok" "RAM-only keystore mounts created"
 mkdir -p /run/worker
 mount -t tmpfs -o size=20M,mode=700 tmpfs /run/worker
 
-# Download keystore and password from separate S3 pre-signed URLs directly to RAM
+# ─── Download keystore and password from S3 ───
+download_s3_file() {
+    local url="$1"
+    local out_path="$2"
+    local desc="$3"
+    local err_file="/tmp/${desc}_curl_err.log"
+
+    echo "Downloading ${desc}..."
+    echo "  URL prefix: ${url:0:80}..."
+
+    local http_code
+    http_code=$(curl -sL --max-time 30 --retry 3 --retry-delay 2 \
+        -w "%{http_code}" \
+        -o "$out_path" \
+        "$url" 2>"$err_file")
+
+    local curl_exit=$?
+    echo "  HTTP status: ${http_code:-unknown}"
+    echo "  curl exit code: $curl_exit"
+    echo "  Output file: $out_path"
+    echo "  File size: $(stat -c%s "$out_path" 2>/dev/null || echo 0) bytes"
+
+    if [ "$http_code" != "200" ]; then
+        echo "  ERROR: ${desc} download failed (HTTP ${http_code})"
+        if [ -s "$err_file" ]; then
+            echo "  curl stderr:"
+            cat "$err_file" | sed 's/^/    /'
+        fi
+        rm -f "$out_path"
+        return 1
+    fi
+
+    if [ ! -s "$out_path" ]; then
+        echo "  ERROR: ${desc} downloaded file is empty"
+        return 1
+    fi
+
+    echo "  ${desc} downloaded successfully"
+    return 0
+}
+
 if [ -n "$S3_KEYSTORE_URL" ] && [ -n "$S3_PASSWORD_URL" ]; then
-    echo "Downloading keystore from secure storage to RAM..."
-    curl -sfL "$S3_KEYSTORE_URL" -o /data/gateway-transcoding/keystore/wallet
-    if [ -f /data/gateway-transcoding/keystore/wallet ]; then
+    if download_s3_file "$S3_KEYSTORE_URL" /data/gateway-transcoding/keystore/wallet "keystore"; then
         cp /data/gateway-transcoding/keystore/wallet /data/gateway-ai-batch/keystore/wallet
         cp /data/gateway-transcoding/keystore/wallet /data/gateway-ai-lv2v/keystore/wallet
         chmod 600 /data/gateway-*/keystore/wallet
-        echo "Keystore installed in RAM successfully"
-        report_status "wallet" "downloaded" "Keystore downloaded to RAM"
+        report_status "wallet" "downloaded" "Keystore downloaded to RAM ($(stat -c%s /data/gateway-transcoding/keystore/wallet 2>/dev/null || echo 0) bytes)"
     else
-        echo "ERROR: Failed to download keystore from S3"
-        report_status "wallet" "error" "Failed to download keystore"
+        report_status "wallet" "error" "Failed to download keystore from S3"
     fi
 
-    echo "Downloading password from secure storage to RAM..."
-    curl -sfL "$S3_PASSWORD_URL" -o /data/gateway-transcoding/keystore/.password
-    if [ -f /data/gateway-transcoding/keystore/.password ]; then
+    if download_s3_file "$S3_PASSWORD_URL" /data/gateway-transcoding/keystore/.password "password"; then
         cp /data/gateway-transcoding/keystore/.password /data/gateway-ai-batch/keystore/.password
         cp /data/gateway-transcoding/keystore/.password /data/gateway-ai-lv2v/keystore/.password
         chmod 600 /data/gateway-*/keystore/.password
-        echo "Password installed in RAM successfully"
         report_status "password" "downloaded" "Password downloaded to RAM"
     else
-        echo "ERROR: Failed to download password from S3"
-        report_status "password" "error" "Failed to download password"
+        report_status "password" "error" "Failed to download password from S3"
     fi
 
     # Notify backend that wallet was downloaded (so it can delete S3 objects early)
@@ -92,6 +127,25 @@ fi
 
 # Setup worker directory in RAM
 cd /run/worker
+
+# Write fallback agent script so we don't embed multi-line Python inside YAML
+cat > /run/worker/fallback_agent.py << 'PYEOF'
+import os, time, httpx
+instance_id = os.environ.get("VULTR_INSTANCE_ID", "")
+region = os.environ.get("WORKER_REGION", "")
+token = os.environ.get("WORKER_API_TOKEN", "")
+server = os.environ.get("MAIN_SERVER_URL", "http://localhost:8088")
+while True:
+    try:
+        data = {"capabilities_names": {"transcription": True, "translation": True}}
+        resp = httpx.post(f"{server}/api/capabilities", json={
+            "worker_token": token, "instance_id": instance_id,
+            "region_id": region, "gateway_type": "ai-lv2v", "data": data
+        }, timeout=10)
+    except Exception:
+        pass
+    time.sleep(30)
+PYEOF
 
 # Create docker-compose.yml
 # NOTE: No wallet secrets in this file. Password is read from tmpfs at runtime.
@@ -179,6 +233,8 @@ services:
     image: python:3.11-slim
     container_name: worker-agent
     working_dir: /app
+    volumes:
+      - /run/worker:/app
     environment:
       - MAIN_SERVER_URL={{MAIN_SERVER_URL}}
       - WORKER_API_TOKEN={{WORKER_API_TOKEN}}
@@ -192,26 +248,8 @@ services:
     restart: "no"
     command: >
       sh -c "pip install httpx &&
-             curl -sL '{{MAIN_SERVER_URL}}/static/agent.py' -o agent.py 2>/dev/null || true &&
-             if [ -f agent.py ]; then python agent.py; else
-             python3 -c '
-import os, time, httpx
-instance_id = os.environ.get(\"VULTR_INSTANCE_ID\", \"\")
-region = os.environ.get(\"WORKER_REGION\", \"\")
-token = os.environ.get(\"WORKER_API_TOKEN\", \"\")
-server = os.environ.get(\"MAIN_SERVER_URL\", \"http://localhost:8088\")
-while True:
-    try:
-        data = {\"capabilities_names\": {\"transcription\": True, \"translation\": True}}
-        resp = httpx.post(f\"{server}/api/capabilities\", json={
-            \"worker_token\": token, \"instance_id\": instance_id,
-            \"region_id\": region, \"gateway_type\": \"ai-lv2v\", \"data\": data
-        }, timeout=10)
-    except Exception:
-        pass
-    time.sleep(30)
-';
-             fi"
+             curl -sL '{{MAIN_SERVER_URL}}/static/agent.py' -o /app/agent.py 2>/dev/null || true &&
+             if [ -f /app/agent.py ]; then python /app/agent.py; else python /app/fallback_agent.py; fi"
 WORKEREOF
 
 # Create .env file for docker-compose (NO wallet secrets — non-sensitive only)
