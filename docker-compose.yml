@@ -28,10 +28,13 @@ services:
   backend:
     build: ./backend
     container_name: capabilities-backend
+    ports:
+      - 8000:8000
     volumes:
       - ./data/admin:/data
       - ./data/wallets:/data/wallets
       - ./backend/startup.sh:/app/startup.sh:ro
+      - ./webapp/dist:/app/static:ro
     environment:
       - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}

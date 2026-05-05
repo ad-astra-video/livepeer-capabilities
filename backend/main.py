@@ -48,6 +48,17 @@ async def wipe_instance_wallet(ip_address: str, instance_token: str) -> bool:
 
 @app.on_event("startup")
 def startup():
+    import sqlite3
+    db_path = os.environ.get("DATABASE_PATH", "/data/admin.db")
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute("PRAGMA table_info(users)")
+    columns = [col[1] for col in cursor.fetchall()]
+    if "token_version" not in columns:
+        cursor.execute("ALTER TABLE users ADD COLUMN token_version INTEGER DEFAULT 0")
+        conn.commit()
+        print("Migrated: added token_version column to users")
+    conn.close()
     db = next(get_db())
     init_admin_user(db)
 
