@@ -65,7 +65,7 @@ def startup():
     db = next(get_db())
     init_admin_user(db)
 
-    available = list_available_wallets, create_wallet_marker, WALLET_POOL_DIR()
+    available = list_available_wallets()
     if not available:
         print("WARNING: No wallet markers found. Gateway instances will fail to spawn. "
               "Create .address marker files in the wallet pool directory.")
