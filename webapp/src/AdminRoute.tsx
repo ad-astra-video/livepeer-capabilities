@@ -412,6 +412,8 @@ function AdminPortal({ user, onLogout }: { user: AuthUser; onLogout: () => void 
         body: JSON.stringify({ region_id: regionId })
       });
       if (res.ok) {
+        const newInstance = await res.json();
+        setInstances(prev => [newInstance, ...prev]);
         setMessage('Instance created');
       } else {
         const data = await res.json().catch(() => ({}));
