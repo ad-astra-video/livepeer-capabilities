@@ -446,6 +446,11 @@ function AdminPortal({ user, onLogout }: { user: AuthUser; onLogout: () => void 
     try {
       const res = await fetch('/api/instances/sync', { method: 'POST', credentials: 'include' });
       if (res.ok) {
+        const refreshed = await fetch('/api/instances', { credentials: 'include' });
+        if (refreshed.ok) {
+          const updated = await refreshed.json();
+          setInstances(updated);
+        }
         setMessage('Synced with Vultr');
       } else {
         const data = await res.json().catch(() => ({}));

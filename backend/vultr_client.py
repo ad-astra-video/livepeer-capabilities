@@ -35,9 +35,12 @@ class VultrClient:
         data = await self._request("GET", f"{BASE_URL}/regions")
         return data.get("regions", [])
 
-    async def list_instances(self) -> List[Dict]:
+    async def list_instances(self, label_prefix: str = 'lp-worker-') -> List[Dict]:
         data = await self._request("GET", f"{BASE_URL}/instances")
-        return data.get("instances", [])
+        instances = data.get("instances", [])
+        if label_prefix:
+            instances = [i for i in instances if i.get("label", "").startswith(label_prefix)]
+        return instances
 
     async def create_instance(
         self,
