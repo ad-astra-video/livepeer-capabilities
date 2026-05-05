@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 
-from database import get_db, User, Region, Instance, CapabilityData, JobRun, SessionLocal, InstanceStatus
+from database import get_db, User, Region, Instance, CapabilityData, JobRun, SessionLocal, InstanceStatus, WorkerLog
 from auth import (
     get_current_user, init_admin_user, hash_password,
     verify_password, create_token, decode_token
@@ -372,33 +372,71 @@ def get_capabilities(
 
 @app.get("/api/capabilities/aggregated")
 def get_aggregated_capabilities(db: Session = Depends(get_db)):
+    """
+    Aggregation strategy:
+      1. Take latest snapshot per (instance_id, gateway_type) — each region's data
+         is a point-in-time snapshot, not cumulative.
+      2. Deduplicate orchestrators by address across regions, tagging each with
+         the list of regions that reported it. When the same orchestrator appears
+         in multiple regions, keep the data from the most recent snapshot.
+      3. GPUs inside each orchestrator are tagged with the same region list.
+    """
     query = db.query(CapabilityData).order_by(CapabilityData.received_at.desc())
     results = query.all()
+
+    # Phase 1: latest snapshot per (instance_id, gateway_type)
     seen = set()
-    aggregated = {}
+    latest = []
     for r in results:
         key = (r.instance_id, r.gateway_type)
-        if key in seen:
-            continue
-        seen.add(key)
+        if key not in seen:
+            seen.add(key)
+            latest.append(r)
+
+    # Phase 2: group by gateway_type
+    aggregated = {}
+    for r in latest:
         gt = r.gateway_type
         if gt not in aggregated:
             aggregated[gt] = {
                 "gateway_type": gt,
                 "regions": {},
                 "orchestrators": [],
-                "capabilities_names": {}
+                "capabilities_names": {},
             }
         data = r.data or {}
         orchs = data.get("orchestrators") or []
-        aggregated[gt]["orchestrators"].extend(orchs)
         aggregated[gt]["capabilities_names"].update(data.get("capabilities_names", {}))
         if r.region_id:
             aggregated[gt]["regions"][r.region_id] = {
                 "instance_id": r.instance_id,
                 "orch_count": len(orchs),
-                "last_seen": r.received_at.isoformat() if r.received_at else None
+                "last_seen": r.received_at.isoformat() if r.received_at else None,
             }
+
+        # Dedup orchestrators by address across regions
+        orch_map = aggregated[gt].get("_orch_map") or {}
+        for orch in orchs:
+            addr = orch.get("address", "")
+            if not addr:
+                continue
+            if addr not in orch_map:
+                orch_map[addr] = {**orch, "_regions": [r.region_id] if r.region_id else []}
+            elif r.region_id and r.region_id not in orch_map[addr]["_regions"]:
+                orch_map[addr]["_regions"].append(r.region_id)
+
+        aggregated[gt]["_orch_map"] = orch_map
+
+    # Phase 3: flatten deduped orchestrators, strip internal keys
+    for gt in list(aggregated.keys()):
+        orch_map = aggregated[gt].pop("_orch_map", {})
+        orch_list = []
+        for o in orch_map.values():
+            entry = {k: v for k, v in o.items() if not k.startswith("_")}
+            entry["regions"] = o.get("_regions", [])
+            orch_list.append(entry)
+        aggregated[gt]["orchestrators"] = orch_list
+
     return {"gateways": list(aggregated.values())}
 
 # ─── Instance Completion (Worker-facing) ───
