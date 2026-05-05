@@ -549,7 +549,7 @@ function AdminPortal({ user, onLogout }: { user: AuthUser; onLogout: () => void 
           <div className="table-wrapper">
             <table className="data-table">
               <thead>
-                <tr><th>Region</th><th>Instance</th><th>Status</th><th>Started</th><th>Completed</th></tr>
+                <tr><th>Region</th><th>Instance</th><th>Status</th><th>Started</th><th>Completed</th><th>Agent Logs</th></tr>
               </thead>
               <tbody>
                 {jobs.map(j => (
@@ -559,6 +559,11 @@ function AdminPortal({ user, onLogout }: { user: AuthUser; onLogout: () => void 
                     <td>{j.status}</td>
                     <td>{new Date(j.started_at).toLocaleString()}</td>
                     <td>{j.completed_at ? new Date(j.completed_at).toLocaleString() : '\u2014'}</td>
+                    <td>
+                      <a className="detail-link" href={`/api/instances/${j.instance_id}/logs/view`} target="_blank" rel="noopener">
+                        View Logs
+                      </a>
+                    </td>
                   </tr>
                 ))}
               </tbody>

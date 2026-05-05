@@ -2,7 +2,7 @@ import os
 import json
 from fastapi import FastAPI, Depends, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import JSONResponse, FileResponse, PlainTextResponse
 from fastapi import Response
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
@@ -46,6 +46,20 @@ def startup():
         cursor.execute("ALTER TABLE users ADD COLUMN token_version INTEGER DEFAULT 0")
         conn.commit()
         print("Migrated: added token_version column to users")
+    # Ensure worker_logs table exists
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='worker_logs'")
+    if not cursor.fetchone():
+        cursor.execute("""
+            CREATE TABLE worker_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                instance_id VARCHAR NOT NULL,
+                log_text TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_worker_logs_instance ON worker_logs(instance_id)")
+        conn.commit()
+        print("Migrated: created worker_logs table")
     conn.close()
     db = next(get_db())
     init_admin_user(db)
@@ -263,6 +277,55 @@ def get_instance_status(instance_id: str, db: Session = Depends(get_db), user: U
             for s in statuses
         ]
     }
+
+# ─── Worker Log Routes ───
+class LogSubmit(BaseModel):
+    worker_token: str
+    log_text: str
+
+@app.post("/api/instances/{instance_id}/logs")
+def submit_instance_logs(instance_id: str, req: LogSubmit, db: Session = Depends(get_db)):
+    """Worker-facing: submit log text for the instance."""
+    if req.worker_token != WORKER_TOKEN:
+        raise HTTPException(status_code=401, detail="Invalid worker token")
+    log_entry = WorkerLog(
+        instance_id=instance_id,
+        log_text=req.log_text
+    )
+    db.add(log_entry)
+    db.commit()
+    return {"ok": True}
+
+@app.get("/api/instances/{instance_id}/logs")
+def get_instance_logs(instance_id: str, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """Admin-facing: retrieve all log entries for an instance, ordered by time."""
+    logs = db.query(WorkerLog).filter(WorkerLog.instance_id == instance_id).order_by(WorkerLog.created_at.asc()).all()
+    return {
+        "instance_id": instance_id,
+        "logs": [
+            {
+                "id": l.id,
+                "log_text": l.log_text,
+                "created_at": l.created_at.isoformat() if l.created_at else None
+            }
+            for l in logs
+        ]
+    }
+
+# ─── Log viewer (plain text, no auth required for direct URL access) ───
+@app.get("/api/instances/{instance_id}/logs/view")
+def view_instance_logs(instance_id: str, db: Session = Depends(get_db)):
+    """Render plain-text log view for opening in a new browser tab."""
+    logs = db.query(WorkerLog).filter(WorkerLog.instance_id == instance_id).order_by(WorkerLog.created_at.asc()).all()
+    lines = []
+    for l in logs:
+        ts = l.created_at.strftime("%Y-%m-%d %H:%M:%S") if l.created_at else "unknown"
+        lines.append(f"=== Log entry #{l.id} (received {ts}) ===")
+        lines.append(l.log_text)
+        lines.append("")
+    if not lines:
+        return PlainTextResponse(f"No logs found for instance {instance_id}\n")
+    return PlainTextResponse("\n".join(lines))
 
 @app.post("/api/instances/sync")
 async def sync_instances(db: Session = Depends(get_db), user: User = Depends(get_current_user)):

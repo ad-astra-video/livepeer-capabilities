@@ -3,6 +3,7 @@ import sys
 import time
 import httpx
 import json
+import threading
 from datetime import datetime
 
 MAIN_SERVER_URL = os.environ.get("MAIN_SERVER_URL", "http://localhost:8088")
@@ -17,8 +18,42 @@ GATEWAYS = [
     {"name": "ai-lv2v", "url": "http://gateway-ai-lv2v:2939/getNetworkCapabilities"},
 ]
 
+# ─── Log buffer ───
+_log_buffer = []
+_log_lock = threading.Lock()
+_last_flush_cycle = 0
+LOG_FLUSH_INTERVAL = 5  # flush every N polling cycles
+
 def log(msg):
-    print(f"[{datetime.utcnow().isoformat()}] {msg}", flush=True)
+    ts = datetime.utcnow().isoformat()
+    line = f"[{ts}] {msg}"
+    print(line, flush=True)
+    with _log_lock:
+        _log_buffer.append(line)
+
+def flush_logs():
+    """Send buffered logs to the backend."""
+    with _log_lock:
+        if not _log_buffer:
+            return
+        text = "\n".join(_log_buffer)
+        _log_buffer.clear()
+    try:
+        payload = {
+            "worker_token": WORKER_API_TOKEN,
+            "log_text": text
+        }
+        resp = httpx.post(
+            f"{MAIN_SERVER_URL}/api/instances/{INSTANCE_ID}/logs",
+            json=payload,
+            timeout=10
+        )
+        if resp.status_code == 200:
+            log(f"  -> LOG FLUSH: sent {len(text)} chars, HTTP {resp.status_code}")
+        else:
+            log(f"  -> LOG FLUSH: HTTP {resp.status_code} (logs remain buffered)")
+    except Exception as e:
+        log(f"  -> LOG FLUSH FAILED: {e} (logs remain buffered)")
 
 def report_status(component, status, message=""):
     try:
@@ -138,8 +173,14 @@ def main():
         log(f"--- Attempt {attempt}/{max_attempts} (est {remaining_time}s remaining) ---")
         run_once(gateways_done)
 
+        # Flush logs periodically
+        if attempt % LOG_FLUSH_INTERVAL == 0:
+            flush_logs()
+
         if len(gateways_done) == len(GATEWAYS):
             log(f"SUCCESS: All {len(GATEWAYS)} gateways completed after {attempt} attempts")
+            # Final log flush before completing
+            flush_logs()
             mark_complete()
             log("Agent exiting cleanly")
             sys.exit(0)
@@ -151,6 +192,8 @@ def main():
     log("TIMEOUT: Max attempts reached without completing all gateways")
     log(f"  Completed: {', '.join(sorted(gateways_done)) or 'none'}")
     log(f"  Missing:   {', '.join(sorted(gw['name'] for gw in GATEWAYS if gw['name'] not in gateways_done))}")
+    # Final flush on timeout
+    flush_logs()
     report_status("agent", "timeout", "Max polling attempts reached")
     log("Agent exiting with error code 1")
     sys.exit(1)
