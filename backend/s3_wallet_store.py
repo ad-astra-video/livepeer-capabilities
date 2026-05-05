@@ -20,6 +20,21 @@ S3_REGION = os.environ.get("S3_REGION", "us-east-1")
 S3_URL_EXPIRY_SECONDS = int(os.environ.get("S3_URL_EXPIRY_SECONDS", "600"))
 S3_OBJECT_TTL_HOURS = int(os.environ.get("S3_OBJECT_TTL_HOURS", "24"))
 
+def _get_signing_region() -> str:
+    """For Vultr Object Storage, the SigV4 region must match the cluster ID in the endpoint
+    hostname (e.g. 'ewr1' from 'ewr1.vultrobjects.com'). Using a mismatched region such as
+    'us-east-1' causes presigned URL signature validation to fail."""
+    if "vultrobjects.com" in S3_ENDPOINT:
+        try:
+            from urllib.parse import urlparse
+            host = urlparse(S3_ENDPOINT).hostname or ""
+            cluster = host.split(".")[0]
+            if cluster:
+                return cluster
+        except Exception:
+            pass
+    return S3_REGION
+
 def _get_s3_client():
     if not HAS_BOTO3:
         raise RuntimeError("boto3 not installed")
@@ -30,7 +45,7 @@ def _get_s3_client():
         endpoint_url=S3_ENDPOINT,
         aws_access_key_id=S3_ACCESS_KEY,
         aws_secret_access_key=S3_SECRET_KEY,
-        region_name=S3_REGION,
+        region_name=_get_signing_region(),
         config=Config(signature_version="s3v4", s3={"addressing_style": "path"})
     )
 

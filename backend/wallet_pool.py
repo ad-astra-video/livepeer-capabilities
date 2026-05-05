@@ -8,11 +8,6 @@ WALLET_POOL_DIR = os.environ.get("WALLET_POOL_DIR", "/data/wallets")
 KEYSTORE_PREFIX = "keystore/"
 PASSWORD_PREFIX = "password/"
 
-# In-memory tracking of allocated wallet marker paths.
-# Restarting the backend resets this; the database remains the source of truth
-# for which wallet is assigned to a running instance.
-_allocated: set = set()
-
 
 def _ensure_pool_dir():
     os.makedirs(WALLET_POOL_DIR, exist_ok=True)
@@ -66,18 +61,19 @@ def list_available_wallets() -> list:
         if os.path.isdir(subdir):
             wallets.extend(_list_marker_files(subdir))
 
-    # Exclude currently allocated wallets
-    return [w for w in wallets if w not in _allocated]
+    return wallets
 
 
 def acquire_wallet() -> Optional[Dict[str, Any]]:
-    """Pick an available wallet marker. Returns None if pool empty."""
+    """Pick any wallet marker from the pool. Returns None if pool empty.
+
+    Wallets are shared — multiple workers can use the same wallet.
+    """
     available = list_available_wallets()
     for fpath in available:
         fname = os.path.basename(fpath)
         address = _parse_address_from_filename(fname)
         if address:
-            _allocated.add(fpath)
             return {
                 "address": address,
                 "source_path": fpath,
@@ -88,9 +84,8 @@ def acquire_wallet() -> Optional[Dict[str, Any]]:
 
 
 def release_wallet(wallet_source_path: str):
-    """Release a wallet back to the available pool."""
-    if wallet_source_path:
-        _allocated.discard(wallet_source_path)
+    """No-op — wallets are shared and not exclusively allocated."""
+    pass
 
 
 def get_or_create_wallet() -> Dict[str, Any]:
