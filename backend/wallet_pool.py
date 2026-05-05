@@ -5,8 +5,8 @@ from typing import Optional, Dict, Any
 from s3_wallet_store import generate_presigned_url, delete_object, is_configured
 
 WALLET_POOL_DIR = os.environ.get("WALLET_POOL_DIR", "/data/wallets")
-KEYSTORE_PREFIX = "wallets/keystore/"
-PASSWORD_PREFIX = "wallets/password/"
+KEYSTORE_PREFIX = "keystore/"
+PASSWORD_PREFIX = "password/"
 
 # In-memory tracking of allocated wallet marker paths.
 # Restarting the backend resets this; the database remains the source of truth
@@ -102,8 +102,8 @@ def get_or_create_wallet() -> Dict[str, Any]:
         "Wallet pool is empty. Create marker files in "
         f"'{WALLET_POOL_DIR}' named '0x<address>.address' (can be blank). "
         "Sub-folders (e.g., transcoding/, ai-batch/, lv2v/) are supported. "
-        "Upload keystore to S3 at 'wallets/keystore/0x<address>.json' and "
-        "password to 'wallets/password/0x<address>.password'. "
+        "Upload keystore to S3 at 'keystore/0x<address>.json' and "
+        "password to 'password/0x<address>.password'. "
         "See data/wallets/README.md for setup instructions."
     )
 

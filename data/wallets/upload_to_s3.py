@@ -112,8 +112,8 @@ def upload_from_combined(fpath: str, marker_dir: str = None, subfolder: str = No
         sys.exit(1)
 
     print(f"Uploading wallet {address}")
-    keystore_key = f"wallets/keystore/{address}.json"
-    password_key = f"wallets/password/{address}.password"
+    keystore_key = f"keystore/{address}.json"
+    password_key = f"password/{address}.password"
 
     upload_object(keystore_key, json.dumps(keystore).encode("utf-8"), "application/json")
     upload_object(password_key, password.encode("utf-8"), "text/plain")
@@ -144,8 +144,8 @@ def upload_separate(keystore_path: str, password_path: str, marker_dir: str = No
         sys.exit(1)
 
     print(f"Uploading wallet {address}")
-    keystore_key = f"wallets/keystore/{address}.json"
-    password_key = f"wallets/password/{address}.password"
+    keystore_key = f"keystore/{address}.json"
+    password_key = f"password/{address}.password"
 
     upload_object(keystore_key, json.dumps(keystore).encode("utf-8"), "application/json")
     upload_object(password_key, password.encode("utf-8"), "text/plain")

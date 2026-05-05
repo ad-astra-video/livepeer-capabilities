@@ -97,6 +97,7 @@ download_s3_file() {
 
     if [ "$http_code" != "200" ]; then
         echo "  ERROR: ${desc} download failed (HTTP ${http_code})"
+        echo "  URL: ${url}"
         if [ -s "$err_file" ]; then
             echo "  curl stderr:"
             cat "$err_file" | sed 's/^/    /'
@@ -122,7 +123,7 @@ if [ -n "$S3_KEYSTORE_URL" ] && [ -n "$S3_PASSWORD_URL" ]; then
         chmod 600 /data/gateway-*/keystore/wallet
         report_status "wallet" "downloaded" "Keystore downloaded to RAM ($(stat -c%s /data/gateway-transcoding/keystore/wallet 2>/dev/null || echo 0) bytes)"
     else
-        report_status "wallet" "error" "Failed to download keystore from S3 (HTTP ${_LAST_HTTP_CODE:-unknown}, curl exit ${_LAST_CURL_EXIT:-unknown}) ${_LAST_CURL_ERROR}"
+        report_status "wallet" "error" "Failed to download keystore from S3 (HTTP ${_LAST_HTTP_CODE:-unknown}, curl exit ${_LAST_CURL_EXIT:-unknown}, URL=${S3_KEYSTORE_URL}) ${_LAST_CURL_ERROR}"
     fi
 
     if download_s3_file "$S3_PASSWORD_URL" /data/gateway-transcoding/keystore/.password "password"; then
@@ -131,7 +132,7 @@ if [ -n "$S3_KEYSTORE_URL" ] && [ -n "$S3_PASSWORD_URL" ]; then
         chmod 600 /data/gateway-*/keystore/.password
         report_status "password" "downloaded" "Password downloaded to RAM"
     else
-        report_status "password" "error" "Failed to download password from S3 (HTTP ${_LAST_HTTP_CODE:-unknown}, curl exit ${_LAST_CURL_EXIT:-unknown}) ${_LAST_CURL_ERROR}"
+        report_status "password" "error" "Failed to download password from S3 (HTTP ${_LAST_HTTP_CODE:-unknown}, curl exit ${_LAST_CURL_EXIT:-unknown}, URL=${S3_PASSWORD_URL}) ${_LAST_CURL_ERROR}"
     fi
 
     # Notify backend that wallet was downloaded (so it can delete S3 objects early)
