@@ -1,4 +1,5 @@
 import os
+import base64
 import httpx
 from typing import Optional, List, Dict
 
@@ -79,6 +80,6 @@ class VultrClient:
         script = script.replace("{{S3_PASSWORD_URL}}", s3_password_url)
         script = script.replace("${MAX_CYCLES}", "10")
 
-        return script
+        return base64.b64encode(script.encode("utf-8")).decode("utf-8")
 
 vultr = VultrClient()
