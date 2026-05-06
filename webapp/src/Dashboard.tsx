@@ -170,21 +170,42 @@ interface PipelineInfo {
   orchCount: number;
   gpuCount: number;
   modelGpuCounts: Record<string, number>;
+  modelInUseCounts: Record<string, number>;
 }
 
 function extractPipelines(orchs: Orchestrator[], filterByAdvertised: boolean = false): PipelineInfo[] {
-  const byPipeline = new Map<string, { models: Set<string>; orchs: Set<string>; gpuCount: number; modelGpuCounts: Map<string, number> }>();
+  const byPipeline = new Map<string, { models: Set<string>; orchs: Set<string>; gpuCount: number; modelGpuCounts: Map<string, number>; modelInUseCounts: Map<string, number> }>();
   for (const orch of orchs) {
     if (!orch.hardware) continue;
     const advertisedModels = filterByAdvertised ? getAdvertisedModels(orch) : null;
+
+    // Build model -> inUse map from PerCapability constraints
+    const modelInUse: Map<string, number> = new Map();
+    const pc = orch.capabilities?.constraints?.PerCapability;
+    if (pc) {
+      for (const capData of Object.values(pc)) {
+        if (capData.models) {
+          for (const [modelName, modelInfo] of Object.entries(capData.models)) {
+            if (modelInfo.capacityInUse !== undefined) {
+              modelInUse.set(modelName, (modelInUse.get(modelName) || 0) + modelInfo.capacityInUse);
+            }
+          }
+        }
+      }
+    }
+
     for (const hw of orch.hardware) {
       if (filterByAdvertised && advertisedModels && advertisedModels.size > 0 && !advertisedModels.has(hw.model_id)) continue;
       const p = hw.pipeline || 'unknown';
-      const existing = byPipeline.get(p) || { models: new Set<string>(), orchs: new Set<string>(), gpuCount: 0, modelGpuCounts: new Map<string, number>() };
+      const existing = byPipeline.get(p) || { models: new Set<string>(), orchs: new Set<string>(), gpuCount: 0, modelGpuCounts: new Map<string, number>(), modelInUseCounts: new Map<string, number>() };
       if (hw.model_id) {
         existing.models.add(hw.model_id);
         const gpuCountForHw = hw.gpu_info ? Object.keys(hw.gpu_info).length : 0;
         existing.modelGpuCounts.set(hw.model_id, (existing.modelGpuCounts.get(hw.model_id) || 0) + gpuCountForHw);
+        const inUse = modelInUse.get(hw.model_id) || 0;
+        if (inUse > 0) {
+          existing.modelInUseCounts.set(hw.model_id, inUse);
+        }
       }
       existing.orchs.add(orch.address);
       existing.gpuCount += hw.gpu_info ? Object.keys(hw.gpu_info).length : 0;
@@ -198,6 +219,7 @@ function extractPipelines(orchs: Orchestrator[], filterByAdvertised: boolean = f
       orchCount: info.orchs.size,
       gpuCount: info.gpuCount,
       modelGpuCounts: Object.fromEntries([...info.modelGpuCounts.entries()].sort((a, b) => b[1] - a[1])),
+      modelInUseCounts: Object.fromEntries([...info.modelInUseCounts.entries()].sort((a, b) => b[1] - a[1])),
     }))
     .sort((a, b) => b.orchCount - a.orchCount);
 }
@@ -774,11 +796,14 @@ export default function Dashboard() {
                                       <td className="mono">{p.pipeline}</td>
                                       <td>
                                         <div className="tag-list">
-                                          {p.models.map((m, j) => (
-                                            <span key={j} className="tag model" title={`${p.modelGpuCounts[m] ?? 0} GPU(s)`}>
-                                              {m} ({p.modelGpuCounts[m] ?? 0})
-                                            </span>
-                                          ))}
+                                          {p.models.map((m, j) => {
+                                            const inUse = p.modelInUseCounts[m];
+                                            return (
+                                              <span key={j} className="tag model" title={`${p.modelGpuCounts[m] ?? 0} GPU(s), ${inUse !== undefined ? inUse : 0} in use`}>
+                                                {m} ({p.modelGpuCounts[m] ?? 0} GPU{inUse !== undefined ? `, ${inUse} inUse` : ''})
+                                              </span>
+                                            );
+                                          })}
                                         </div>
                                       </td>
                                       <td>{p.orchCount}</td>
