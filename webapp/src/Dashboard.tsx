@@ -356,6 +356,7 @@ interface GatewayData {
 export default function Dashboard() {
   const [gatewayData, setGatewayData] = useState<Record<string, GatewayData>>({});
   const [initialLoad, setInitialLoad] = useState(true);
+  const initialLoadRef = useRef(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
@@ -475,7 +476,8 @@ export default function Dashboard() {
 
   const fetchData = useCallback(async () => {
     setError(null);
-    if (!initialLoad) setRefreshing(true);
+    const isFirst = initialLoadRef.current;
+    if (!isFirst) setRefreshing(true);
     try {
       const res = await fetch('/api/capabilities/aggregated');
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -485,6 +487,7 @@ export default function Dashboard() {
         byType[gw.gateway_type] = gw;
       }
       setGatewayData(byType);
+      initialLoadRef.current = false;
       setInitialLoad(false);
       setRefreshing(false);
       setLastUpdated(new Date());
@@ -492,10 +495,11 @@ export default function Dashboard() {
       setTimeout(() => setJustUpdated(false), 600);
     } catch (err) {
       setError((err as Error).message);
+      initialLoadRef.current = false;
       setInitialLoad(false);
       setRefreshing(false);
     }
-  }, [initialLoad]);
+  }, []);
 
   useEffect(() => {
     fetchData();
