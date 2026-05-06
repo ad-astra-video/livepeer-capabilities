@@ -425,6 +425,27 @@ interface GatewayData {
   region_details: Record<string, { code: string; city: string; country: string }>;
 }
 
+// Sub-tab definitions per gateway type
+const AI_SUB_TABS = [
+  { key: 'overview', label: 'Overview' },
+  { key: 'orchestrators', label: 'Orchestrators' },
+  { key: 'gpus', label: 'GPUs' },
+  { key: 'pipelines', label: 'Pipelines' },
+  { key: 'capabilities', label: 'Capabilities' },
+  { key: 'prices', label: 'Prices' },
+];
+
+const TRANSCODING_SUB_TABS = [
+  { key: 'overview', label: 'Overview' },
+  { key: 'transcoders', label: 'Transcoders' },
+  { key: 'capabilities', label: 'Capabilities' },
+  { key: 'prices', label: 'Prices' },
+];
+
+function getSubTabs(gatewayKey: string): typeof AI_SUB_TABS {
+  return gatewayKey === 'transcoding' ? TRANSCODING_SUB_TABS : AI_SUB_TABS;
+}
+
 export default function Dashboard() {
   const [gatewayData, setGatewayData] = useState<Record<string, GatewayData>>({});
   const [initialLoad, setInitialLoad] = useState(true);
@@ -434,6 +455,7 @@ export default function Dashboard() {
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [justUpdated, setJustUpdated] = useState(false);
   const [activeTab, setActiveTab] = useState<string>('transcoding');
+  const [activeSubTab, setActiveSubTab] = useState<string>('overview');
   const [showDupModal, setShowDupModal] = useState(false);
   const [selectedRegion, setSelectedRegion] = useState<string>('');
   const [searchText, setSearchText] = useState<string>('');
@@ -603,6 +625,13 @@ export default function Dashboard() {
 
   const activeGateway = gatewayData[activeTab];
   const orchs = activeGateway?.orchestrators || [];
+  const subTabs = useMemo(() => getSubTabs(activeTab), [activeTab]);
+
+  // Reset sub-tab to overview when switching gateway tabs
+  const handleTabChange = useCallback((tab: string) => {
+    setActiveTab(tab);
+    setActiveSubTab('overview');
+  }, []);
 
   // Filter orchestrators by selected region and search text
   const filteredOrchs = useMemo(() => {
@@ -836,7 +865,7 @@ export default function Dashboard() {
               <button
                 key={gw.key}
                 className={`tab ${activeTab === gw.key ? 'active' : ''}`}
-                onClick={() => setActiveTab(gw.key)}
+                onClick={() => handleTabChange(gw.key)}
               >
                 <span className="tab-label">{gw.label}</span>
                 <span className="tab-badges">
@@ -884,123 +913,155 @@ export default function Dashboard() {
                     )}
                   </div>
 
-                  {/* Top 5 Orchestrators */}
-                  {(() => {
-                    const agg = aggregateByAddress(filteredOrchs);
-                    if (activeTab === 'transcoding') {
-                      const sorted = applySort(agg, (e: TopOrchEntry) => e.hevcCapacity, 'desc');
-                      return sorted.some(e => e.hevcCapacity > 0) ? (
-                        <Top5Orchestrators entries={sorted} label="HEVC Capacity" icon={ICON_GPU} allRegionDetails={allRegionDetails} />
-                      ) : null;
-                    } else {
-                      const sorted = applySort(agg, (e: TopOrchEntry) => e.gpuCount, 'desc');
-                      return sorted.some(e => e.gpuCount > 0) ? (
-                        <Top5Orchestrators entries={sorted} label="GPUs" icon={ICON_GPU} allRegionDetails={allRegionDetails} />
-                      ) : null;
-                    }
-                  })()}
+                  {/* Sub-tabs */}
+                  <div className="sub-tabs">
+                    {subTabs.map(st => {
+                      let badge = 0;
+                      if (st.key === 'overview') badge = filteredOrchs.length;
+                      else if (st.key === 'orchestrators') badge = filteredOrchs.length;
+                      else if (st.key === 'gpus') badge = activeAnalysis.totalUniqueCount;
+                      else if (st.key === 'pipelines') badge = extractPipelines(filteredOrchs, true).length;
+                      else if (st.key === 'transcoders') badge = filteredOrchs.length;
+                      else if (st.key === 'capabilities') badge = extractCapabilities(filteredOrchs, activeGateway.capabilities_names || {}, [HEVC_ENCODE_CAP]).length;
+                      else if (st.key === 'prices') badge = filteredOrchs.reduce((s, o) => s + (o.capabilities_prices?.length || 0), 0);
+                      if (st.key === 'prices' && badge === 0) return null;
+                      return (
+                        <button
+                          key={st.key}
+                          className={`sub-tab ${activeSubTab === st.key ? 'active' : ''}`}
+                          onClick={() => setActiveSubTab(st.key)}
+                        >
+                          {st.label}
+                          {badge > 0 && <span className="sub-tab-badge">{badge}</span>}
+                        </button>
+                      );
+                    })}
+                  </div>
 
-                  {activeTab === 'transcoding' ? (
-                    <section className="pipeline-details">
-                      <h3>GPU Transcoders</h3>
-                      <div className="table-wrapper">
-                        <table className="data-table">
-                          <thead>
-                            <tr>
-                              <SortableHeader label="Address" sortKey="address" sortState={getSort('transcoders')} onSort={(k) => handleSort('transcoders', k)} />
-                              <SortableHeader label="URI" sortKey="uri" sortState={getSort('transcoders')} onSort={(k) => handleSort('transcoders', k)} />
-                              <SortableHeader label="HEVC Encode Capacity" sortKey="hevc" sortState={getSort('transcoders')} onSort={(k) => handleSort('transcoders', k)} />
-                              <SortableHeader label="Regions" sortKey="regions" sortState={getSort('transcoders')} onSort={(k) => handleSort('transcoders', k)} />
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {applySort(filteredOrchs, (o: Orchestrator) => {
-                              const s = getSort('transcoders');
-                              switch (s.column) {
-                                case 'address': return o.address;
-                                case 'uri': return o.orch_uri;
-                                case 'hevc': return o.capabilities?.capacities?.[HEVC_ENCODE_CAP] ?? -1;
-                                case 'regions': return (o.regions || []).join(',');
-                                default: return o.address;
-                              }
-                            }, getSort('transcoders').direction).map((orch, i) => {
-                              const hevcCapacity = orch.capabilities?.capacities?.[HEVC_ENCODE_CAP];
-                              return (
-                                <tr key={i}>
-                                  <td className="mono" title={orch.address}>
-                                    {orch.address.slice(0, 10)}...{orch.address.slice(-8)}
-                                  </td>
-                                  <td className="mono small">{orch.orch_uri}</td>
-                                  <td className="mono">{hevcCapacity ?? '\u2014'}</td>
-                                  <td>
-                                    <div className="tag-list">
-                                      {(orch.regions || []).map(r => (
-                                        <span key={r} className="tag region" title={`${allRegionDetails[r]?.city || ''} ${allRegionDetails[r]?.country || ''}`}>{r.toUpperCase()}</span>
-                                      ))}
-                                    </div>
-                                  </td>
-                                </tr>
-                              );
-                            })}
-                          </tbody>
-                        </table>
-                      </div>
-                    </section>
-                  ) : (
+                  {/* ── Overview ── */}
+                  {activeSubTab === 'overview' && (
                     <>
                       {(() => {
-                        const pipelines = extractPipelines(filteredOrchs, true);
-                        if (pipelines.length === 0) return null;
-                        const sorted = applySort(pipelines, (p: PipelineInfo) => {
-                          const s = getSort('pipelines');
-                          switch (s.column) {
-                            case 'pipeline': return p.pipeline;
-                            case 'models': return p.models.join(',');
-                            case 'orches': return p.orchCount;
-                            case 'gpus': return p.gpuCount;
-                            default: return p.pipeline;
-                          }
-                        }, getSort('pipelines').direction);
-                        return (
-                          <section className="pipeline-details">
-                            <h3>Pipelines</h3>
-                            <div className="table-wrapper">
-                              <table className="data-table pipeline-table">
-                                <thead>
-                                  <tr>
-                                    <SortableHeader label="Pipeline" sortKey="pipeline" sortState={getSort('pipelines')} onSort={(k) => handleSort('pipelines', k)} />
-                                    <SortableHeader label="Models (GPUs)" sortKey="models" sortState={getSort('pipelines')} onSort={(k) => handleSort('pipelines', k)} />
-                                    <SortableHeader label="Orchs" sortKey="orches" sortState={getSort('pipelines')} onSort={(k) => handleSort('pipelines', k)} />
-                                    <SortableHeader label="Total GPUs" sortKey="gpus" sortState={getSort('pipelines')} onSort={(k) => handleSort('pipelines', k)} />
-                                  </tr>
-                                </thead>
-                                <tbody>
-                                  {sorted.map((p, i) => (
-                                    <tr key={i}>
-                                      <td className="mono">{p.pipeline}</td>
-                                      <td>
-                                        <div className="tag-list">
-                                          {p.models.map((m, j) => {
-                                            const inUse = p.modelInUseCounts[m];
-                                            return (
-                                              <span key={j} className="tag model" title={`${p.modelGpuCounts[m] ?? 0} GPU(s), ${inUse !== undefined ? inUse : 0} in use`}>
-                                                {m} ({p.modelGpuCounts[m] ?? 0} GPU{inUse !== undefined ? `, ${inUse} inUse` : ''})
-                                              </span>
-                                            );
-                                          })}
-                                        </div>
-                                      </td>
-                                      <td>{p.orchCount}</td>
-                                      <td>{p.gpuCount}</td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
-                            </div>
-                          </section>
-                        );
+                        const agg = aggregateByAddress(filteredOrchs);
+                        if (activeTab === 'transcoding') {
+                          const sorted = applySort(agg, (e: TopOrchEntry) => e.hevcCapacity, 'desc');
+                          return sorted.some(e => e.hevcCapacity > 0) ? (
+                            <Top5Orchestrators entries={sorted} label="HEVC Capacity" icon={ICON_GPU} allRegionDetails={allRegionDetails} />
+                          ) : null;
+                        } else {
+                          const sorted = applySort(agg, (e: TopOrchEntry) => e.gpuCount, 'desc');
+                          return sorted.some(e => e.gpuCount > 0) ? (
+                            <Top5Orchestrators entries={sorted} label="GPUs" icon={ICON_GPU} allRegionDetails={allRegionDetails} />
+                          ) : null;
+                        }
                       })()}
 
+                      {activeTab === 'transcoding' ? (
+                        <section className="pipeline-details">
+                          <h3>GPU Transcoders</h3>
+                          <div className="table-wrapper">
+                            <table className="data-table">
+                              <thead>
+                                <tr>
+                                  <SortableHeader label="Address" sortKey="address" sortState={getSort('transcoders')} onSort={(k) => handleSort('transcoders', k)} />
+                                  <SortableHeader label="URI" sortKey="uri" sortState={getSort('transcoders')} onSort={(k) => handleSort('transcoders', k)} />
+                                  <SortableHeader label="HEVC Encode Capacity" sortKey="hevc" sortState={getSort('transcoders')} onSort={(k) => handleSort('transcoders', k)} />
+                                  <SortableHeader label="Regions" sortKey="regions" sortState={getSort('transcoders')} onSort={(k) => handleSort('transcoders', k)} />
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {applySort(filteredOrchs, (o: Orchestrator) => {
+                                  const s = getSort('transcoders');
+                                  switch (s.column) {
+                                    case 'address': return o.address;
+                                    case 'uri': return o.orch_uri;
+                                    case 'hevc': return o.capabilities?.capacities?.[HEVC_ENCODE_CAP] ?? -1;
+                                    case 'regions': return (o.regions || []).join(',');
+                                    default: return o.address;
+                                  }
+                                }, getSort('transcoders').direction).map((orch, i) => {
+                                  const hevcCapacity = orch.capabilities?.capacities?.[HEVC_ENCODE_CAP];
+                                  return (
+                                    <tr key={i}>
+                                      <td className="mono" title={orch.address}>
+                                        {orch.address.slice(0, 10)}...{orch.address.slice(-8)}
+                                      </td>
+                                      <td className="mono small">{orch.orch_uri}</td>
+                                      <td className="mono">{hevcCapacity ?? '\u2014'}</td>
+                                      <td>
+                                        <div className="tag-list">
+                                          {(orch.regions || []).map(r => (
+                                            <span key={r} className="tag region" title={`${allRegionDetails[r]?.city || ''} ${allRegionDetails[r]?.country || ''}`}>{r.toUpperCase()}</span>
+                                          ))}
+                                        </div>
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                        </section>
+                      ) : (
+                        (() => {
+                          const pipelines = extractPipelines(filteredOrchs, true);
+                          if (pipelines.length === 0) return null;
+                          const sorted = applySort(pipelines, (p: PipelineInfo) => {
+                            const s = getSort('pipelines');
+                            switch (s.column) {
+                              case 'pipeline': return p.pipeline;
+                              case 'models': return p.models.join(',');
+                              case 'orches': return p.orchCount;
+                              case 'gpus': return p.gpuCount;
+                              default: return p.pipeline;
+                            }
+                          }, getSort('pipelines').direction);
+                          return (
+                            <section className="pipeline-details">
+                              <h3>Pipelines</h3>
+                              <div className="table-wrapper">
+                                <table className="data-table pipeline-table">
+                                  <thead>
+                                    <tr>
+                                      <SortableHeader label="Pipeline" sortKey="pipeline" sortState={getSort('pipelines')} onSort={(k) => handleSort('pipelines', k)} />
+                                      <SortableHeader label="Models (GPUs)" sortKey="models" sortState={getSort('pipelines')} onSort={(k) => handleSort('pipelines', k)} />
+                                      <SortableHeader label="Orchs" sortKey="orches" sortState={getSort('pipelines')} onSort={(k) => handleSort('pipelines', k)} />
+                                      <SortableHeader label="Total GPUs" sortKey="gpus" sortState={getSort('pipelines')} onSort={(k) => handleSort('pipelines', k)} />
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {sorted.map((p, i) => (
+                                      <tr key={i}>
+                                        <td className="mono">{p.pipeline}</td>
+                                        <td>
+                                          <div className="tag-list">
+                                            {p.models.map((m, j) => {
+                                              const inUse = p.modelInUseCounts[m];
+                                              return (
+                                                <span key={j} className="tag model" title={`${p.modelGpuCounts[m] ?? 0} GPU(s), ${inUse !== undefined ? inUse : 0} in use`}>
+                                                  {m} ({p.modelGpuCounts[m] ?? 0} GPU{inUse !== undefined ? `, ${inUse} inUse` : ''})
+                                                </span>
+                                              );
+                                            })}
+                                          </div>
+                                        </td>
+                                        <td>{p.orchCount}</td>
+                                        <td>{p.gpuCount}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            </section>
+                          );
+                        })()
+                      )}
+                    </>
+                  )}
+
+                  {/* ── Orchestrators (AI tabs only) ── */}
+                  {activeSubTab === 'orchestrators' && activeTab !== 'transcoding' && (
+                    <>
                       <h3>Orchestrators</h3>
                       <div className="table-wrapper">
                         <table className="data-table orchestrators-table">
@@ -1087,36 +1148,39 @@ export default function Dashboard() {
                           </tbody>
                         </table>
                       </div>
+                    </>
+                  )}
 
-                      {activeAnalysis.totalUniqueCount > 0 && (() => {
-                        // Flatten GPU rows for sorting
-                        interface GPURow { orch: Orchestrator; hw: HardwareInformation; gpu: GPUComputeInfo }
-                        const gpuRows: GPURow[] = [];
-                        for (const orch of filteredOrchs) {
-                          const am = getAdvertisedModels(orch);
-                          for (const hw of orch.hardware ?? []) {
-                            if (am.size > 0 && !am.has(hw.model_id)) continue;
-                            for (const gpu of Object.values(hw.gpu_info ?? {})) {
-                              gpuRows.push({ orch, hw, gpu });
-                            }
+                  {/* ── GPUs (AI tabs only) ── */}
+                  {activeSubTab === 'gpus' && activeTab !== 'transcoding' && activeAnalysis.totalUniqueCount > 0 && (
+                    (() => {
+                      interface GPURow { orch: Orchestrator; hw: HardwareInformation; gpu: GPUComputeInfo }
+                      const gpuRows: GPURow[] = [];
+                      for (const orch of filteredOrchs) {
+                        const am = getAdvertisedModels(orch);
+                        for (const hw of orch.hardware ?? []) {
+                          if (am.size > 0 && !am.has(hw.model_id)) continue;
+                          for (const gpu of Object.values(hw.gpu_info ?? {})) {
+                            gpuRows.push({ orch, hw, gpu });
                           }
                         }
-                        const sorted = applySort(gpuRows, (r: GPURow) => {
-                          const s = getSort('gpu_details');
-                          switch (s.column) {
-                            case 'address': return r.orch.address;
-                            case 'pipeline': return r.hw.pipeline ?? '';
-                            case 'model': return r.hw.model_id ?? '';
-                            case 'gpu_id': return r.gpu.id;
-                            case 'gpu_name': return r.gpu.name ?? 'Unknown';
-                            case 'compute': return r.gpu.major ?? 0;
-                            case 'mem_total': return r.gpu.memory_total ?? 0;
-                            case 'mem_free': return r.gpu.memory_free ?? 0;
-                            case 'regions': return (r.orch.regions || []).join(',');
-                            default: return r.orch.address;
-                          }
-                        }, getSort('gpu_details').direction);
-                        return (
+                      }
+                      const sorted = applySort(gpuRows, (r: GPURow) => {
+                        const s = getSort('gpu_details');
+                        switch (s.column) {
+                          case 'address': return r.orch.address;
+                          case 'pipeline': return r.hw.pipeline ?? '';
+                          case 'model': return r.hw.model_id ?? '';
+                          case 'gpu_id': return r.gpu.id;
+                          case 'gpu_name': return r.gpu.name ?? 'Unknown';
+                          case 'compute': return r.gpu.major ?? 0;
+                          case 'mem_total': return r.gpu.memory_total ?? 0;
+                          case 'mem_free': return r.gpu.memory_free ?? 0;
+                          case 'regions': return (r.orch.regions || []).join(',');
+                          default: return r.orch.address;
+                        }
+                      }, getSort('gpu_details').direction);
+                      return (
                         <>
                           <h3>GPU Details</h3>
                           <div className="table-wrapper">
@@ -1160,30 +1224,177 @@ export default function Dashboard() {
                             </table>
                           </div>
                         </>
-                        );
-                      })()}
+                      );
+                    })()
+                  )}
 
-                      {filteredOrchs.some(o => o.capabilities_prices && o.capabilities_prices.length > 0) && (() => {
-                        // Flatten price rows for sorting
-                        interface PriceRow { orch: Orchestrator; price: CapabilityPrice }
-                        const priceRows: PriceRow[] = [];
-                        for (const orch of filteredOrchs) {
-                          for (const price of orch.capabilities_prices ?? []) {
-                            priceRows.push({ orch, price });
-                          }
+                  {/* ── Transcoders (transcoding tab only) ── */}
+                  {activeSubTab === 'transcoders' && activeTab === 'transcoding' && (
+                    <section className="pipeline-details">
+                      <h3>GPU Transcoders</h3>
+                      <div className="table-wrapper">
+                        <table className="data-table">
+                          <thead>
+                            <tr>
+                              <SortableHeader label="Address" sortKey="address" sortState={getSort('transcoders')} onSort={(k) => handleSort('transcoders', k)} />
+                              <SortableHeader label="URI" sortKey="uri" sortState={getSort('transcoders')} onSort={(k) => handleSort('transcoders', k)} />
+                              <SortableHeader label="HEVC Encode Capacity" sortKey="hevc" sortState={getSort('transcoders')} onSort={(k) => handleSort('transcoders', k)} />
+                              <SortableHeader label="Regions" sortKey="regions" sortState={getSort('transcoders')} onSort={(k) => handleSort('transcoders', k)} />
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {applySort(filteredOrchs, (o: Orchestrator) => {
+                              const s = getSort('transcoders');
+                              switch (s.column) {
+                                case 'address': return o.address;
+                                case 'uri': return o.orch_uri;
+                                case 'hevc': return o.capabilities?.capacities?.[HEVC_ENCODE_CAP] ?? -1;
+                                case 'regions': return (o.regions || []).join(',');
+                                default: return o.address;
+                              }
+                            }, getSort('transcoders').direction).map((orch, i) => {
+                              const hevcCapacity = orch.capabilities?.capacities?.[HEVC_ENCODE_CAP];
+                              return (
+                                <tr key={i}>
+                                  <td className="mono" title={orch.address}>
+                                    {orch.address.slice(0, 10)}...{orch.address.slice(-8)}
+                                  </td>
+                                  <td className="mono small">{orch.orch_uri}</td>
+                                  <td className="mono">{hevcCapacity ?? '\u2014'}</td>
+                                  <td>
+                                    <div className="tag-list">
+                                      {(orch.regions || []).map(r => (
+                                        <span key={r} className="tag region" title={`${allRegionDetails[r]?.city || ''} ${allRegionDetails[r]?.country || ''}`}>{r.toUpperCase()}</span>
+                                      ))}
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    </section>
+                  )}
+
+                  {/* ── Pipelines (AI tabs only) ── */}
+                  {activeSubTab === 'pipelines' && activeTab !== 'transcoding' && (
+                    (() => {
+                      const pipelines = extractPipelines(filteredOrchs, true);
+                      if (pipelines.length === 0) return null;
+                      const sorted = applySort(pipelines, (p: PipelineInfo) => {
+                        const s = getSort('pipelines');
+                        switch (s.column) {
+                          case 'pipeline': return p.pipeline;
+                          case 'models': return p.models.join(',');
+                          case 'orches': return p.orchCount;
+                          case 'gpus': return p.gpuCount;
+                          default: return p.pipeline;
                         }
-                        const sorted = applySort(priceRows, (r: PriceRow) => {
-                          const s = getSort('prices');
-                          switch (s.column) {
-                            case 'address': return r.orch.address;
-                            case 'capability': return activeGateway.capabilities_names?.[r.price.capability.toString()] ?? `ID:${r.price.capability}`;
-                            case 'constraint': return r.price.constraint;
-                            case 'price': return r.price.pricePerUnit;
-                            case 'pixels': return r.price.pixelsPerUnit;
-                            default: return r.orch.address;
-                          }
-                        }, getSort('prices').direction);
-                        return (
+                      }, getSort('pipelines').direction);
+                      return (
+                        <section className="pipeline-details">
+                          <h3>Pipelines</h3>
+                          <div className="table-wrapper">
+                            <table className="data-table pipeline-table">
+                              <thead>
+                                <tr>
+                                  <SortableHeader label="Pipeline" sortKey="pipeline" sortState={getSort('pipelines')} onSort={(k) => handleSort('pipelines', k)} />
+                                  <SortableHeader label="Models (GPUs)" sortKey="models" sortState={getSort('pipelines')} onSort={(k) => handleSort('pipelines', k)} />
+                                  <SortableHeader label="Orchs" sortKey="orches" sortState={getSort('pipelines')} onSort={(k) => handleSort('pipelines', k)} />
+                                  <SortableHeader label="Total GPUs" sortKey="gpus" sortState={getSort('pipelines')} onSort={(k) => handleSort('pipelines', k)} />
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {sorted.map((p, i) => (
+                                  <tr key={i}>
+                                    <td className="mono">{p.pipeline}</td>
+                                    <td>
+                                      <div className="tag-list">
+                                        {p.models.map((m, j) => {
+                                          const inUse = p.modelInUseCounts[m];
+                                          return (
+                                            <span key={j} className="tag model" title={`${p.modelGpuCounts[m] ?? 0} GPU(s), ${inUse !== undefined ? inUse : 0} in use`}>
+                                              {m} ({p.modelGpuCounts[m] ?? 0} GPU{inUse !== undefined ? `, ${inUse} inUse` : ''})
+                                            </span>
+                                          );
+                                        })}
+                                      </div>
+                                    </td>
+                                    <td>{p.orchCount}</td>
+                                    <td>{p.gpuCount}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </section>
+                      );
+                    })()
+                  )}
+
+                  {/* ── Capabilities ── */}
+                  {activeSubTab === 'capabilities' && (
+                    (() => {
+                      const caps = extractCapabilities(filteredOrchs, activeGateway.capabilities_names || {}, [HEVC_ENCODE_CAP]);
+                      if (caps.length === 0) return null;
+                      return (
+                        <section className="capabilities-section">
+                          <h3>Capabilities ({caps.length})</h3>
+                          <div className="capability-list">
+                            {caps.map((cap, i) => (
+                              <div key={i} className="capability-item">
+                                <div className="capability-header">
+                                  <span className="capability-name">{cap.name}</span>
+                                  <span className="capability-id">ID: {cap.id}</span>
+                                </div>
+                                <div className="capability-meta">
+                                  <span className="capability-meta-item"><strong>Capacity:</strong> {cap.count}</span>
+                                  {cap.models.length > 0 && (
+                                    <span className="capability-meta-item"><strong>Models:</strong> {cap.models.length}</span>
+                                  )}
+                                </div>
+                                {cap.models.length > 0 && (
+                                  <div className="models-list">
+                                    {cap.models.map((m, j) => (
+                                      <span key={j} className={`model-tag ${m.warm ? 'warm' : ''}`} title={m.warm ? 'Warm (ready)' : 'Cold'}>
+                                        {m.warm && <span className="warm-indicator" />}
+                                        {m.name}
+                                        {m.runnerVersion && <span className="runner-version">({m.runnerVersion})</span>}
+                                      </span>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        </section>
+                      );
+                    })()
+                  )}
+
+                  {/* ── Prices ── */}
+                  {activeSubTab === 'prices' && (
+                    filteredOrchs.some(o => o.capabilities_prices && o.capabilities_prices.length > 0) && (() => {
+                      interface PriceRow { orch: Orchestrator; price: CapabilityPrice }
+                      const priceRows: PriceRow[] = [];
+                      for (const orch of filteredOrchs) {
+                        for (const price of orch.capabilities_prices ?? []) {
+                          priceRows.push({ orch, price });
+                        }
+                      }
+                      const sorted = applySort(priceRows, (r: PriceRow) => {
+                        const s = getSort('prices');
+                        switch (s.column) {
+                          case 'address': return r.orch.address;
+                          case 'capability': return activeGateway.capabilities_names?.[r.price.capability.toString()] ?? `ID:${r.price.capability}`;
+                          case 'constraint': return r.price.constraint;
+                          case 'price': return r.price.pricePerUnit;
+                          case 'pixels': return r.price.pixelsPerUnit;
+                          default: return r.orch.address;
+                        }
+                      }, getSort('prices').direction);
+                      return (
                         <>
                           <h3>Capability Prices</h3>
                           <div className="table-wrapper">
@@ -1213,46 +1424,8 @@ export default function Dashboard() {
                             </table>
                           </div>
                         </>
-                        );
-                      })()}
-
-                      {(() => {
-                        const caps = extractCapabilities(filteredOrchs, activeGateway.capabilities_names || {}, [HEVC_ENCODE_CAP]);
-                        if (caps.length === 0) return null;
-                        return (
-                          <section className="capabilities-section">
-                            <h3>Capabilities ({caps.length})</h3>
-                            <div className="capability-list">
-                              {caps.map((cap, i) => (
-                                <div key={i} className="capability-item">
-                                  <div className="capability-header">
-                                    <span className="capability-name">{cap.name}</span>
-                                    <span className="capability-id">ID: {cap.id}</span>
-                                  </div>
-                                  <div className="capability-meta">
-                                    <span className="capability-meta-item"><strong>Capacity:</strong> {cap.count}</span>
-                                    {cap.models.length > 0 && (
-                                      <span className="capability-meta-item"><strong>Models:</strong> {cap.models.length}</span>
-                                    )}
-                                  </div>
-                                  {cap.models.length > 0 && (
-                                    <div className="models-list">
-                                      {cap.models.map((m, j) => (
-                                        <span key={j} className={`model-tag ${m.warm ? 'warm' : ''}`} title={m.warm ? 'Warm (ready)' : 'Cold'}>
-                                          {m.warm && <span className="warm-indicator" />}
-                                          {m.name}
-                                          {m.runnerVersion && <span className="runner-version">({m.runnerVersion})</span>}
-                                        </span>
-                                      ))}
-                                    </div>
-                                  )}
-                                </div>
-                              ))}
-                            </div>
-                          </section>
-                        );
-                      })()}
-                    </>
+                      );
+                    })()
                   )}
                 </>
               )}

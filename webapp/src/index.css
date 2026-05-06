@@ -1296,6 +1296,62 @@ button:disabled::after {
   font-size: 0.85rem;
 }
 
+/* ─── Sub-tabs ─── */
+.sub-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid #334155;
+  margin-bottom: 16px;
+  padding: 0 4px;
+  overflow-x: auto;
+}
+
+.sub-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  padding: 6px 14px;
+  color: #64748b;
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.sub-tab:hover:not(.active) {
+  background: #1e293b;
+  color: #e2e8f0;
+}
+
+.sub-tab.active {
+  background: #263449;
+  color: #f8fafc;
+  border-color: #3b82f6;
+  border-bottom: 1px solid #263449;
+  margin-bottom: -1px;
+}
+
+.sub-tab-badge {
+  font-size: 0.65rem;
+  font-weight: 700;
+  background: #0f172a;
+  color: #94a3b8;
+  padding: 1px 6px;
+  border-radius: 8px;
+  min-width: 18px;
+  text-align: center;
+}
+
+.sub-tab.active .sub-tab-badge {
+  background: #1e293b;
+  color: #7dd3fc;
+}
+
 @media (max-width: 768px) {
   .app {
     padding: 12px;
