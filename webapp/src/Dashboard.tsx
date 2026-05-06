@@ -532,10 +532,13 @@ export default function Dashboard() {
         <div className="tabs">
           {GATEWAY_TYPES.map(gw => {
             const data = gatewayData[gw.key];
-            const orchCount = data?.orchestrators?.length || 0;
+            const gwOrchs = selectedRegion
+              ? (data?.orchestrators || []).filter(o => o.regions && o.regions.includes(selectedRegion))
+              : data?.orchestrators || [];
+            const orchCount = gwOrchs.length;
             const gpuCount = gw.key === 'transcoding'
-              ? countHEVCEncode(data?.orchestrators || [])
-              : analyzeGPUs(extractGPUs(data?.orchestrators || [], gw.key)).totalUniqueCount;
+              ? countHEVCEncode(gwOrchs)
+              : analyzeGPUs(extractGPUs(gwOrchs, gw.key)).totalUniqueCount;
             return (
               <button
                 key={gw.key}
