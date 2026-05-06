@@ -311,7 +311,7 @@ function extractPipelines(orchs: Orchestrator[], filterByAdvertised: boolean = f
         existing.modelGpuCounts.set(hw.model_id, (existing.modelGpuCounts.get(hw.model_id) || 0) + gpuCountForHw);
         const inUse = modelInUse.get(hw.model_id) || 0;
         if (inUse > 0) {
-          existing.modelInUseCounts.set(hw.model_id, inUse);
+          existing.modelInUseCounts.set(hw.model_id, (existing.modelInUseCounts.get(hw.model_id) || 0) + inUse);
         }
       }
       existing.orchs.add(orch.address);
@@ -359,7 +359,7 @@ function extractCapabilities(orchs: Orchestrator[], capsMap: Record<string, stri
             const existing = capEntry.models.get(modelName) || { warm: false };
             if (modelInfo.warm) existing.warm = true;
             if (modelInfo.runnerVersion) existing.runnerVersion = modelInfo.runnerVersion;
-            if (modelInfo.capacityInUse !== undefined) existing.capacityInUse = modelInfo.capacityInUse;
+            if (modelInfo.capacityInUse !== undefined) existing.capacityInUse = (existing.capacityInUse ?? 0) + modelInfo.capacityInUse;
             capEntry.models.set(modelName, existing);
           }
         }
