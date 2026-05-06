@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import type { GPUComputeInfo, Orchestrator } from './types';
 
 const GATEWAY_TYPES = [
@@ -305,6 +305,92 @@ export default function Dashboard() {
   const [showDupModal, setShowDupModal] = useState(false);
   const [selectedRegion, setSelectedRegion] = useState<string>('');
   const [searchText, setSearchText] = useState<string>('');
+  const [rawSearch, setRawSearch] = useState<string>('');
+  const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [suggestions, setSuggestions] = useState<Array<{ type: string; value: string }>>([]);
+  const [suggestionActive, setSuggestionActive] = useState<number>(-1);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  // Debounce rawSearch -> searchText (300ms)
+  useEffect(() => {
+    if (debounceTimer.current) clearTimeout(debounceTimer.current);
+    debounceTimer.current = setTimeout(() => {
+      setSearchText(rawSearch);
+    }, 300);
+    return () => {
+      if (debounceTimer.current) clearTimeout(debounceTimer.current);
+    };
+  }, [rawSearch]);
+
+  // Collect autocomplete suggestions when rawSearch has >= 2 chars
+  const collectSearchSuggestions = useCallback((q: string, data: Record<string, GatewayData>) => {
+    if (q.length < 2) return [];
+    const ql = q.toLowerCase();
+    const seen = new Set<string>();
+    const results: Array<{ type: string; value: string }> = [];
+    const add = (type: string, value: string) => {
+      const key = `${type}:${value.toLowerCase()}`;
+      if (!seen.has(key) && results.length < 8 && value.toLowerCase().includes(ql)) {
+        seen.add(key);
+        results.push({ type, value });
+      }
+    };
+    for (const gw of Object.values(data)) {
+      for (const orch of gw.orchestrators || []) {
+        add('addr', orch.address);
+        add('uri', orch.orch_uri);
+        if (orch.regions) for (const r of orch.regions) add('region', String(r));
+        if (orch.capabilities?.version) add('version', orch.capabilities.version);
+        if (orch.hardware) {
+          for (const hw of orch.hardware) {
+            add('pipeline', hw.pipeline);
+            add('model', hw.model_id);
+            if (hw.gpu_info) {
+              for (const gpu of Object.values(hw.gpu_info)) {
+                add('gpu', gpu.name);
+                add('gpu_id', gpu.id);
+              }
+            }
+          }
+        }
+      }
+    }
+    return results;
+  }, []);
+
+  useEffect(() => {
+    setSuggestions(collectSearchSuggestions(rawSearch, gatewayData));
+    setSuggestionActive(-1);
+  }, [rawSearch, gatewayData, collectSearchSuggestions]);
+
+  const handleSearchClear = useCallback(() => {
+    setRawSearch('');
+    setSearchText('');
+    searchInputRef.current?.focus();
+  }, []);
+
+  const handleSuggestionSelect = useCallback((value: string) => {
+    setRawSearch(value);
+    setSearchText(value);
+    setSuggestions([]);
+    searchInputRef.current?.focus();
+  }, []);
+
+  const handleSearchKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setSuggestionActive(prev => Math.min(prev + 1, suggestions.length - 1));
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setSuggestionActive(prev => Math.max(prev - 1, -1));
+    } else if (e.key === 'Enter' && suggestionActive >= 0) {
+      e.preventDefault();
+      handleSuggestionSelect(suggestions[suggestionActive].value);
+    } else if (e.key === 'Escape') {
+      setSuggestions([]);
+      searchInputRef.current?.blur();
+    }
+  }, [suggestions, suggestionActive, handleSuggestionSelect]);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -438,19 +524,47 @@ export default function Dashboard() {
           <line x1="21" y1="21" x2="16.65" y2="16.65"/>
         </svg>
         <input
+          ref={searchInputRef}
           type="text"
           className="search-input"
           placeholder="Search address, URI, GPU, model, pipeline, region..."
-          value={searchText}
-          onChange={e => setSearchText(e.target.value)}
+          value={rawSearch}
+          onChange={e => setRawSearch(e.target.value)}
+          onKeyDown={handleSearchKeyDown}
         />
-        {searchText && (
-          <button className="search-clear" onClick={() => setSearchText('')} title="Clear search">
+        {rawSearch && (
+          <button className="search-clear" onClick={handleSearchClear} title="Clear search">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="14" height="14">
               <line x1="18" y1="6" x2="6" y2="18"/>
               <line x1="6" y1="6" x2="18" y2="18"/>
             </svg>
           </button>
+        )}
+        {suggestions.length > 0 && (
+          <div className="search-autocomplete">
+            {suggestions.map((s, i) => (
+              <div
+                key={`${s.type}:${s.value}`}
+                className={`search-suggestion ${i === suggestionActive ? 'active' : ''}`}
+                onMouseDown={() => handleSuggestionSelect(s.value)}
+              >
+                <span className="suggest-type">{s.type}</span>
+                <span className="suggest-value">
+                  {(() => {
+                    const idx = s.value.toLowerCase().indexOf(rawSearch.toLowerCase());
+                    if (idx < 0) return s.value;
+                    return (
+                      <>
+                        {s.value.slice(0, idx)}
+                        <mark>{s.value.slice(idx, idx + rawSearch.length)}</mark>
+                        {s.value.slice(idx + rawSearch.length)}
+                      </>
+                    );
+                  })()}
+                </span>
+              </div>
+            ))}
+          </div>
         )}
       </div>
 
