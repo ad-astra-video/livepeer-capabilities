@@ -13,6 +13,39 @@ const ICON_WARNING = '\u{26A0}';
 const ICON_CLOSE = '\u{2715}';
 const HEVC_ENCODE_CAP = '16';
 
+// Aggregate orchestrators by address, summing GPU counts across all URIs
+interface TopOrchEntry {
+  address: string;
+  uris: string[];
+  gpuCount: number;
+  hevcCapacity: number;
+  regions: string[];
+}
+
+function aggregateByAddress(orchs: Orchestrator[]): TopOrchEntry[] {
+  const map = new Map<string, TopOrchEntry>();
+  for (const orch of orchs) {
+    let entry = map.get(orch.address);
+    if (!entry) {
+      entry = { address: orch.address, uris: [], gpuCount: 0, hevcCapacity: 0, regions: [] };
+      map.set(orch.address, entry);
+    }
+    entry.uris.push(orch.orch_uri);
+    entry.hevcCapacity += orch.capabilities?.capacities?.[HEVC_ENCODE_CAP] ?? 0;
+    const advertisedModels = getAdvertisedModels(orch);
+    if (orch.hardware) {
+      for (const hw of orch.hardware) {
+        if (advertisedModels.size > 0 && !advertisedModels.has(hw.model_id)) continue;
+        if (hw.gpu_info) entry.gpuCount += Object.keys(hw.gpu_info).length;
+      }
+    }
+    for (const r of orch.regions || []) {
+      if (!entry.regions.includes(r)) entry.regions.push(r);
+    }
+  }
+  return [...map.values()];
+}
+
 type SortDir = 'asc' | 'desc' | null;
 
 interface SortState {
@@ -35,6 +68,45 @@ function SortableHeader({ label, sortKey, sortState, onSort }: {
     <th className={`sortable-header ${isActive ? 'active' : ''}`} onClick={() => onSort(sortKey)} title="Click to sort">
       {label}{arrow}
     </th>
+  );
+}
+
+function Top5Orchestrators({ entries, label, icon, allRegionDetails }: {
+  entries: TopOrchEntry[];
+  label: string;
+  icon: string;
+  allRegionDetails: Record<string, { code: string; city: string; country: string }>;
+}) {
+  if (entries.length === 0) return null;
+  return (
+    <div className="top5-section">
+      <h3 className="top5-title">{icon} Top 5 Orchestrators by {label}</h3>
+      <div className="top5-grid">
+        {entries.slice(0, 5).map((entry, i) => (
+          <div key={entry.address} className="top5-card">
+            <div className="top5-rank">#{i + 1}</div>
+            <div className="top5-address" title={entry.address}>
+              {entry.address.slice(0, 10)}...{entry.address.slice(-8)}
+            </div>
+            <div className="top5-value">
+              <span className="top5-number">{entry[label === 'GPUs' ? 'gpuCount' : 'hevcCapacity'] as number}</span>
+              <span className="top5-label">{label}</span>
+            </div>
+            <div className="top5-uris">
+              {entry.uris.slice(0, 2).map((u, j) => (
+                <span key={j} className="top5-uri" title={u}>{u}</span>
+              ))}
+              {entry.uris.length > 2 && <span className="top5-uri">+{entry.uris.length - 2}</span>}
+            </div>
+            <div className="top5-regions">
+              {entry.regions.map(r => (
+                <span key={r} className="tag region" title={`${allRegionDetails[r]?.city || ''} ${allRegionDetails[r]?.country || ''}`}>{r.toUpperCase()}</span>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -811,6 +883,22 @@ export default function Dashboard() {
                       </>
                     )}
                   </div>
+
+                  {/* Top 5 Orchestrators */}
+                  {(() => {
+                    const agg = aggregateByAddress(filteredOrchs);
+                    if (activeTab === 'transcoding') {
+                      const sorted = applySort(agg, (e: TopOrchEntry) => e.hevcCapacity, 'desc');
+                      return sorted.some(e => e.hevcCapacity > 0) ? (
+                        <Top5Orchestrators entries={sorted} label="HEVC Capacity" icon={ICON_GPU} allRegionDetails={allRegionDetails} />
+                      ) : null;
+                    } else {
+                      const sorted = applySort(agg, (e: TopOrchEntry) => e.gpuCount, 'desc');
+                      return sorted.some(e => e.gpuCount > 0) ? (
+                        <Top5Orchestrators entries={sorted} label="GPUs" icon={ICON_GPU} allRegionDetails={allRegionDetails} />
+                      ) : null;
+                    }
+                  })()}
 
                   {activeTab === 'transcoding' ? (
                     <section className="pipeline-details">

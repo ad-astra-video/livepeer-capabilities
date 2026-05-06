@@ -291,6 +291,96 @@ section {
   margin-bottom: 32px;
 }
 
+/* ─── Top 5 Orchestrators ─── */
+.top5-section {
+  margin-bottom: 24px;
+}
+
+.top5-title {
+  font-size: 1rem;
+  color: #f8fafc;
+  margin-bottom: 12px;
+  font-weight: 600;
+}
+
+.top5-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
+}
+
+.top5-card {
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 10px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.top5-card:hover {
+  border-color: #6366f1;
+  background: #263449;
+}
+
+.top5-rank {
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: #6366f1;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.top5-address {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.8rem;
+  color: #cbd5e1;
+}
+
+.top5-value {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.top5-number {
+  font-size: 1.75rem;
+  font-weight: 700;
+  color: #60a5fa;
+}
+
+.top5-label {
+  font-size: 0.75rem;
+  color: #94a3b8;
+}
+
+.top5-uris {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.top5-uri {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.65rem;
+  color: #64748b;
+  background: #0f172a;
+  padding: 1px 5px;
+  border-radius: 3px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.top5-regions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+
 section h2 {
   font-size: 1.25rem;
   color: #f8fafc;
