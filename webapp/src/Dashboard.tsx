@@ -13,6 +13,32 @@ const ICON_WARNING = '\u{26A0}';
 const ICON_CLOSE = '\u{2715}';
 const HEVC_ENCODE_CAP = '16';
 
+function orchMatches(orch: Orchestrator, q: string): boolean {
+  if (!q) return true;
+  const ql = q.toLowerCase();
+  if (orch.address?.toLowerCase().includes(ql)) return true;
+  if (orch.orch_uri?.toLowerCase().includes(ql)) return true;
+  if (orch.capabilities?.version?.toLowerCase().includes(ql)) return true;
+  if (orch.hardware) {
+    for (const hw of orch.hardware) {
+      if (hw.pipeline?.toLowerCase().includes(ql)) return true;
+      if (hw.model_id?.toLowerCase().includes(ql)) return true;
+      if (hw.gpu_info) {
+        for (const gpu of Object.values(hw.gpu_info)) {
+          if (gpu.name?.toLowerCase().includes(ql)) return true;
+          if (gpu.id?.toLowerCase().includes(ql)) return true;
+        }
+      }
+    }
+  }
+  if (orch.regions) {
+    for (const r of orch.regions) {
+      if (String(r).toLowerCase().includes(ql)) return true;
+    }
+  }
+  return false;
+}
+
 function formatBytes(bytes: number): string {
   if (bytes === 0) return '0 B';
   const k = 1024;
@@ -278,6 +304,7 @@ export default function Dashboard() {
   const [activeTab, setActiveTab] = useState<string>('transcoding');
   const [showDupModal, setShowDupModal] = useState(false);
   const [selectedRegion, setSelectedRegion] = useState<string>('');
+  const [searchText, setSearchText] = useState<string>('');
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -330,48 +357,57 @@ export default function Dashboard() {
   const activeGateway = gatewayData[activeTab];
   const orchs = activeGateway?.orchestrators || [];
 
-  // Filter orchestrators by selected region (if any)
+  // Filter orchestrators by selected region and search text
   const filteredOrchs = useMemo(() => {
-    if (!selectedRegion) return orchs;
-    return orchs.filter(o => o.regions && o.regions.includes(selectedRegion));
-  }, [orchs, selectedRegion]);
+    return orchs.filter(o => {
+      if (selectedRegion && !(o.regions && o.regions.includes(selectedRegion))) return false;
+      if (!orchMatches(o, searchText)) return false;
+      return true;
+    });
+  }, [orchs, selectedRegion, searchText]);
 
-  // Global GPU entries (filtered by region if selected)
+  // Global GPU entries (filtered by region and search text)
   const gpuEntries = useMemo(() => {
     const entries: GPUEntry[] = [];
     for (const gw of Object.values(gatewayData)) {
       if (gw.gateway_type === 'transcoding') continue;
-      const regionOrchs = selectedRegion
-        ? (gw.orchestrators || []).filter(o => o.regions && o.regions.includes(selectedRegion))
-        : gw.orchestrators || [];
+      const filtered = (gw.orchestrators || []).filter(o => {
+        if (selectedRegion && !(o.regions && o.regions.includes(selectedRegion))) return false;
+        if (!orchMatches(o, searchText)) return false;
+        return true;
+      });
       for (const regionId in gw.regions || {}) {
         if (selectedRegion && regionId !== selectedRegion) continue;
-        entries.push(...extractGPUs(regionOrchs, regionId));
+        entries.push(...extractGPUs(filtered, regionId));
       }
     }
     return entries;
-  }, [gatewayData, selectedRegion]);
+  }, [gatewayData, selectedRegion, searchText]);
 
   const globalAnalysis = useMemo(() => analyzeGPUs(gpuEntries), [gpuEntries]);
 
   const totalHEVC = useMemo(() => {
     const transcoding = gatewayData['transcoding'];
-    const regionOrchs = selectedRegion
-      ? (transcoding?.orchestrators || []).filter(o => o.regions && o.regions.includes(selectedRegion))
-      : transcoding?.orchestrators || [];
-    return countHEVCEncode(regionOrchs);
-  }, [gatewayData, selectedRegion]);
+    const filtered = (transcoding?.orchestrators || []).filter(o => {
+      if (selectedRegion && !(o.regions && o.regions.includes(selectedRegion))) return false;
+      if (!orchMatches(o, searchText)) return false;
+      return true;
+    });
+    return countHEVCEncode(filtered);
+  }, [gatewayData, selectedRegion, searchText]);
 
   const totalOrchestrators = useMemo(() => {
     let count = 0;
     for (const gw of Object.values(gatewayData)) {
-      const regionOrchs = selectedRegion
-        ? (gw.orchestrators || []).filter(o => o.regions && o.regions.includes(selectedRegion))
-        : gw.orchestrators || [];
-      count += regionOrchs.length;
+      const filtered = (gw.orchestrators || []).filter(o => {
+        if (selectedRegion && !(o.regions && o.regions.includes(selectedRegion))) return false;
+        if (!orchMatches(o, searchText)) return false;
+        return true;
+      });
+      count += filtered.length;
     }
     return count;
-  }, [gatewayData, selectedRegion]);
+  }, [gatewayData, selectedRegion, searchText]);
 
   const activeGpuEntries = useMemo(() => {
     return extractGPUs(filteredOrchs, activeTab);
@@ -384,6 +420,13 @@ export default function Dashboard() {
       <header>
         <h1>Livepeer Network Capabilities</h1>
         <div className="header-actions">
+          <input
+            type="text"
+            className="search-input"
+            placeholder="Search (address, URI, GPU, model, pipeline, region)..."
+            value={searchText}
+            onChange={e => setSearchText(e.target.value)}
+          />
           <button onClick={fetchData} disabled={loading}>
             {loading ? 'Refreshing...' : 'Refresh'}
           </button>
@@ -419,7 +462,7 @@ export default function Dashboard() {
         <div className="card">
           <h3>{ICON_PERSON} Total Orchestrators</h3>
           <div className="card-value">{totalOrchestrators}</div>
-          {selectedRegion && <div className="card-detail">filtered: {selectedRegion.toUpperCase()}</div>}
+          {(selectedRegion || searchText) && <div className="card-detail">filtered: {selectedRegion ? selectedRegion.toUpperCase() : ''}{selectedRegion && searchText ? ' + ' : ''}"{searchText}"</div>}
         </div>
         <div className="card">
           <h3>{ICON_GPU} Total AI GPUs</h3>
