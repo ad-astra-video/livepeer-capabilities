@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import type { GPUComputeInfo, Orchestrator } from './types';
+import type { GPUComputeInfo, HardwareInformation, Orchestrator, CapabilityPrice } from './types';
 
 const GATEWAY_TYPES = [
   { key: 'transcoding', label: 'Transcoding' },
@@ -12,6 +12,41 @@ const ICON_GPU = '\u{26A1}';
 const ICON_WARNING = '\u{26A0}';
 const ICON_CLOSE = '\u{2715}';
 const HEVC_ENCODE_CAP = '16';
+
+type SortDir = 'asc' | 'desc' | null;
+
+interface SortState {
+  column: string;
+  direction: SortDir;
+}
+
+function SortableHeader({ label, sortKey, sortState, onSort }: {
+  label: string;
+  sortKey: string;
+  sortState: SortState;
+  onSort: (key: string) => void;
+}) {
+  const isActive = sortState.column === sortKey;
+  let arrow = '';
+  if (isActive) {
+    arrow = sortState.direction === 'asc' ? ' ▲' : ' ▼';
+  }
+  return (
+    <th className={`sortable-header ${isActive ? 'active' : ''}`} onClick={() => onSort(sortKey)} title="Click to sort">
+      {label}{arrow}
+    </th>
+  );
+}
+
+function applySort<T>(items: T[], getter: (item: T) => string | number, direction: SortDir): T[] {
+  if (!direction) return items;
+  return [...items].sort((a, b) => {
+    const va = getter(a);
+    const vb = getter(b);
+    if (typeof va === 'number' && typeof vb === 'number') return direction === 'asc' ? va - vb : vb - va;
+    return direction === 'asc' ? String(va).localeCompare(String(vb)) : String(vb).localeCompare(String(va));
+  });
+}
 
 function orchMatches(orch: Orchestrator, q: string): boolean {
   if (!q) return true;
@@ -320,9 +355,11 @@ interface GatewayData {
 
 export default function Dashboard() {
   const [gatewayData, setGatewayData] = useState<Record<string, GatewayData>>({});
-  const [loading, setLoading] = useState(true);
+  const [initialLoad, setInitialLoad] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [justUpdated, setJustUpdated] = useState(false);
   const [activeTab, setActiveTab] = useState<string>('transcoding');
   const [showDupModal, setShowDupModal] = useState(false);
   const [selectedRegion, setSelectedRegion] = useState<string>('');
@@ -332,6 +369,28 @@ export default function Dashboard() {
   const [suggestions, setSuggestions] = useState<Array<{ type: string; value: string }>>([]);
   const [suggestionActive, setSuggestionActive] = useState<number>(-1);
   const searchInputRef = useRef<HTMLInputElement>(null);
+
+  // Sort state per table
+  const [sortState, setSortState] = useState<Map<string, SortState>>(new Map());
+
+  const handleSort = useCallback((table: string, column: string) => {
+    setSortState(prev => {
+      const next = new Map(prev);
+      const current = next.get(table);
+      if (current?.column === column) {
+        if (current.direction === 'asc') next.set(table, { column, direction: 'desc' });
+        else if (current.direction === 'desc') next.set(table, { column, direction: null });
+        else next.set(table, { column, direction: 'asc' });
+      } else {
+        next.set(table, { column, direction: 'asc' });
+      }
+      return next;
+    });
+  }, []);
+
+  const getSort = useCallback((table: string): SortState => {
+    return sortState.get(table) || { column: '', direction: null };
+  }, [sortState]);
 
   // Debounce rawSearch -> searchText (300ms)
   useEffect(() => {
@@ -415,8 +474,8 @@ export default function Dashboard() {
   }, [suggestions, suggestionActive, handleSuggestionSelect]);
 
   const fetchData = useCallback(async () => {
-    setLoading(true);
     setError(null);
+    if (!initialLoad) setRefreshing(true);
     try {
       const res = await fetch('/api/capabilities/aggregated');
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -426,13 +485,17 @@ export default function Dashboard() {
         byType[gw.gateway_type] = gw;
       }
       setGatewayData(byType);
+      setInitialLoad(false);
+      setRefreshing(false);
       setLastUpdated(new Date());
+      setJustUpdated(true);
+      setTimeout(() => setJustUpdated(false), 600);
     } catch (err) {
       setError((err as Error).message);
-    } finally {
-      setLoading(false);
+      setInitialLoad(false);
+      setRefreshing(false);
     }
-  }, []);
+  }, [initialLoad]);
 
   useEffect(() => {
     fetchData();
@@ -528,11 +591,11 @@ export default function Dashboard() {
       <header>
         <h1>Livepeer Network Capabilities</h1>
         <div className="header-actions">
-          <button onClick={fetchData} disabled={loading}>
-            {loading ? 'Refreshing...' : 'Refresh'}
+          <button onClick={fetchData} disabled={refreshing}>
+            {refreshing ? 'Refreshing...' : 'Refresh'}
           </button>
           {lastUpdated && (
-            <span className="last-updated">
+            <span className={`last-updated ${justUpdated ? 'just-updated' : ''}`}>
               Last updated: {lastUpdated.toLocaleTimeString()}
             </span>
           )}
@@ -713,15 +776,15 @@ export default function Dashboard() {
           })}
         </div>
 
-        <div className="tab-content">
-          {loading && <div className="loading">Loading...</div>}
-          {error && (
+        <div className={`tab-content ${refreshing ? 'refreshing' : ''} ${justUpdated ? 'data-flash' : ''}`}>
+          {initialLoad && <div className="loading">Loading...</div>}
+          {error && !initialLoad && (
             <div className="error">
               <strong>Error:</strong> {error}
             </div>
           )}
 
-          {!loading && !error && activeGateway && (
+          {!initialLoad && activeGateway && (
             <>
               {filteredOrchs.length === 0 ? (
                 <div className="empty">{selectedRegion ? `No orchestrators in ${selectedRegion.toUpperCase()}.` : 'No orchestrators available.'}</div>
@@ -751,10 +814,24 @@ export default function Dashboard() {
                       <div className="table-wrapper">
                         <table className="data-table">
                           <thead>
-                            <tr><th>Address</th><th>URI</th><th>HEVC Encode Capacity</th><th>Regions</th></tr>
+                            <tr>
+                              <SortableHeader label="Address" sortKey="address" sortState={getSort('transcoders')} onSort={(k) => handleSort('transcoders', k)} />
+                              <SortableHeader label="URI" sortKey="uri" sortState={getSort('transcoders')} onSort={(k) => handleSort('transcoders', k)} />
+                              <SortableHeader label="HEVC Encode Capacity" sortKey="hevc" sortState={getSort('transcoders')} onSort={(k) => handleSort('transcoders', k)} />
+                              <SortableHeader label="Regions" sortKey="regions" sortState={getSort('transcoders')} onSort={(k) => handleSort('transcoders', k)} />
+                            </tr>
                           </thead>
                           <tbody>
-                            {filteredOrchs.map((orch, i) => {
+                            {applySort(filteredOrchs, (o: Orchestrator) => {
+                              const s = getSort('transcoders');
+                              switch (s.column) {
+                                case 'address': return o.address;
+                                case 'uri': return o.orch_uri;
+                                case 'hevc': return o.capabilities?.capacities?.[HEVC_ENCODE_CAP] ?? -1;
+                                case 'regions': return (o.regions || []).join(',');
+                                default: return o.address;
+                              }
+                            }, getSort('transcoders').direction).map((orch, i) => {
                               const hevcCapacity = orch.capabilities?.capacities?.[HEVC_ENCODE_CAP];
                               return (
                                 <tr key={i}>
@@ -782,16 +859,31 @@ export default function Dashboard() {
                       {(() => {
                         const pipelines = extractPipelines(filteredOrchs, true);
                         if (pipelines.length === 0) return null;
+                        const sorted = applySort(pipelines, (p: PipelineInfo) => {
+                          const s = getSort('pipelines');
+                          switch (s.column) {
+                            case 'pipeline': return p.pipeline;
+                            case 'models': return p.models.join(',');
+                            case 'orches': return p.orchCount;
+                            case 'gpus': return p.gpuCount;
+                            default: return p.pipeline;
+                          }
+                        }, getSort('pipelines').direction);
                         return (
                           <section className="pipeline-details">
                             <h3>Pipelines</h3>
                             <div className="table-wrapper">
                               <table className="data-table pipeline-table">
                                 <thead>
-                                  <tr><th>Pipeline</th><th>Models (GPUs)</th><th>Orchs</th><th>Total GPUs</th></tr>
+                                  <tr>
+                                    <SortableHeader label="Pipeline" sortKey="pipeline" sortState={getSort('pipelines')} onSort={(k) => handleSort('pipelines', k)} />
+                                    <SortableHeader label="Models (GPUs)" sortKey="models" sortState={getSort('pipelines')} onSort={(k) => handleSort('pipelines', k)} />
+                                    <SortableHeader label="Orchs" sortKey="orches" sortState={getSort('pipelines')} onSort={(k) => handleSort('pipelines', k)} />
+                                    <SortableHeader label="Total GPUs" sortKey="gpus" sortState={getSort('pipelines')} onSort={(k) => handleSort('pipelines', k)} />
+                                  </tr>
                                 </thead>
                                 <tbody>
-                                  {pipelines.map((p, i) => (
+                                  {sorted.map((p, i) => (
                                     <tr key={i}>
                                       <td className="mono">{p.pipeline}</td>
                                       <td>
@@ -821,10 +913,33 @@ export default function Dashboard() {
                       <div className="table-wrapper">
                         <table className="data-table orchestrators-table">
                           <thead>
-                            <tr><th>Address</th><th>URI</th><th>Version</th><th>Capabilities</th><th>Models</th><th>GPUs</th><th>Regions</th></tr>
+                            <tr>
+                              <SortableHeader label="Address" sortKey="address" sortState={getSort('orchestrators')} onSort={(k) => handleSort('orchestrators', k)} />
+                              <SortableHeader label="URI" sortKey="uri" sortState={getSort('orchestrators')} onSort={(k) => handleSort('orchestrators', k)} />
+                              <SortableHeader label="Version" sortKey="version" sortState={getSort('orchestrators')} onSort={(k) => handleSort('orchestrators', k)} />
+                              <SortableHeader label="Capabilities" sortKey="capabilities" sortState={getSort('orchestrators')} onSort={(k) => handleSort('orchestrators', k)} />
+                              <SortableHeader label="Models" sortKey="models" sortState={getSort('orchestrators')} onSort={(k) => handleSort('orchestrators', k)} />
+                              <SortableHeader label="GPUs" sortKey="gpus" sortState={getSort('orchestrators')} onSort={(k) => handleSort('orchestrators', k)} />
+                              <SortableHeader label="Regions" sortKey="regions" sortState={getSort('orchestrators')} onSort={(k) => handleSort('orchestrators', k)} />
+                            </tr>
                           </thead>
                           <tbody>
-                            {filteredOrchs.map((orch, i) => {
+                            {applySort(filteredOrchs, (o: Orchestrator) => {
+                              const s = getSort('orchestrators');
+                              switch (s.column) {
+                                case 'address': return o.address;
+                                case 'uri': return o.orch_uri;
+                                case 'version': return o.capabilities?.version ?? '';
+                                case 'capabilities': return (o.capabilities?.capacities ? Object.keys(o.capabilities.capacities).length : 0);
+                                case 'models': return [...getAdvertisedModels(o)].join(',');
+                                case 'gpus': {
+                                  const am = getAdvertisedModels(o);
+                                  return o.hardware ? o.hardware.reduce((sum, h) => sum + ((am.size === 0 || am.has(h.model_id)) && h.gpu_info ? Object.keys(h.gpu_info).length : 0), 0) : 0;
+                                }
+                                case 'regions': return (o.regions || []).join(',');
+                                default: return o.address;
+                              }
+                            }, getSort('orchestrators').direction).map((orch, i) => {
                               const capNames = getCapabilityNames(orch, activeGateway.capabilities_names || {}, [HEVC_ENCODE_CAP]);
                               const modelConstraints = getModelConstraints(orch);
                               const advertisedModels = getAdvertisedModels(orch);
@@ -881,79 +996,133 @@ export default function Dashboard() {
                         </table>
                       </div>
 
-                      {activeAnalysis.totalUniqueCount > 0 && (
+                      {activeAnalysis.totalUniqueCount > 0 && (() => {
+                        // Flatten GPU rows for sorting
+                        interface GPURow { orch: Orchestrator; hw: HardwareInformation; gpu: GPUComputeInfo }
+                        const gpuRows: GPURow[] = [];
+                        for (const orch of filteredOrchs) {
+                          const am = getAdvertisedModels(orch);
+                          for (const hw of orch.hardware ?? []) {
+                            if (am.size > 0 && !am.has(hw.model_id)) continue;
+                            for (const gpu of Object.values(hw.gpu_info ?? {})) {
+                              gpuRows.push({ orch, hw, gpu });
+                            }
+                          }
+                        }
+                        const sorted = applySort(gpuRows, (r: GPURow) => {
+                          const s = getSort('gpu_details');
+                          switch (s.column) {
+                            case 'address': return r.orch.address;
+                            case 'pipeline': return r.hw.pipeline ?? '';
+                            case 'model': return r.hw.model_id ?? '';
+                            case 'gpu_id': return r.gpu.id;
+                            case 'gpu_name': return r.gpu.name ?? 'Unknown';
+                            case 'compute': return r.gpu.major ?? 0;
+                            case 'mem_total': return r.gpu.memory_total ?? 0;
+                            case 'mem_free': return r.gpu.memory_free ?? 0;
+                            case 'regions': return (r.orch.regions || []).join(',');
+                            default: return r.orch.address;
+                          }
+                        }, getSort('gpu_details').direction);
+                        return (
                         <>
                           <h3>GPU Details</h3>
                           <div className="table-wrapper">
                             <table className="data-table gpu-table">
                               <thead>
                                 <tr>
-                                  <th>Address</th><th>Pipeline</th><th>Model</th>
-                                  <th>GPU ID</th><th>GPU Name</th><th>Compute</th>
-                                  <th>Memory Total</th><th>Memory Free</th><th>Regions</th>
+                                  <SortableHeader label="Address" sortKey="address" sortState={getSort('gpu_details')} onSort={(k) => handleSort('gpu_details', k)} />
+                                  <SortableHeader label="Pipeline" sortKey="pipeline" sortState={getSort('gpu_details')} onSort={(k) => handleSort('gpu_details', k)} />
+                                  <SortableHeader label="Model" sortKey="model" sortState={getSort('gpu_details')} onSort={(k) => handleSort('gpu_details', k)} />
+                                  <SortableHeader label="GPU ID" sortKey="gpu_id" sortState={getSort('gpu_details')} onSort={(k) => handleSort('gpu_details', k)} />
+                                  <SortableHeader label="GPU Name" sortKey="gpu_name" sortState={getSort('gpu_details')} onSort={(k) => handleSort('gpu_details', k)} />
+                                  <SortableHeader label="Compute" sortKey="compute" sortState={getSort('gpu_details')} onSort={(k) => handleSort('gpu_details', k)} />
+                                  <SortableHeader label="Memory Total" sortKey="mem_total" sortState={getSort('gpu_details')} onSort={(k) => handleSort('gpu_details', k)} />
+                                  <SortableHeader label="Memory Free" sortKey="mem_free" sortState={getSort('gpu_details')} onSort={(k) => handleSort('gpu_details', k)} />
+                                  <SortableHeader label="Regions" sortKey="regions" sortState={getSort('gpu_details')} onSort={(k) => handleSort('gpu_details', k)} />
                                 </tr>
                               </thead>
                               <tbody>
-                                {filteredOrchs.map((orch, oi) => {
-                                  const advertisedModels = getAdvertisedModels(orch);
-                                  return (orch.hardware ?? []).map((hw, hi) => {
-                                    if (advertisedModels.size > 0 && !advertisedModels.has(hw.model_id)) return null;
-                                    return Object.values(hw.gpu_info ?? {}).map((gpu, gi) => (
-                                      <tr key={`${oi}-${hi}-${gi}`}>
-                                        <td className="mono small" title={orch.address}>
-                                          {orch.address.slice(0, 8)}...{orch.address.slice(-6)}
-                                        </td>
-                                        <td>{hw.pipeline || '\u2014'}</td>
-                                        <td>{hw.model_id || '\u2014'}</td>
-                                        <td className="mono">{gpu.id.slice(0, 24)}...</td>
-                                        <td>{gpu.name || 'Unknown'}</td>
-                                        <td>{gpu.major}</td>
-                                        <td>{formatBytes(gpu.memory_total)}</td>
-                                        <td>{formatBytes(gpu.memory_free)}</td>
-                                        <td>
-                                          <div className="tag-list">
-                                            {(orch.regions || []).map(r => (
-                                              <span key={r} className="tag region" title={`${allRegionDetails[r]?.city || ''} ${allRegionDetails[r]?.country || ''}`}>{r.toUpperCase()}</span>
-                                            ))}
-                                          </div>
-                                        </td>
-                                      </tr>
-                                    ));
-                                  });
-                                })}
+                                {sorted.map((r, ri) => (
+                                  <tr key={ri}>
+                                    <td className="mono small" title={r.orch.address}>
+                                      {r.orch.address.slice(0, 8)}...{r.orch.address.slice(-6)}
+                                    </td>
+                                    <td>{r.hw.pipeline || '\u2014'}</td>
+                                    <td>{r.hw.model_id || '\u2014'}</td>
+                                    <td className="mono">{r.gpu.id.slice(0, 24)}...</td>
+                                    <td>{r.gpu.name || 'Unknown'}</td>
+                                    <td>{r.gpu.major}</td>
+                                    <td>{formatBytes(r.gpu.memory_total)}</td>
+                                    <td>{formatBytes(r.gpu.memory_free)}</td>
+                                    <td>
+                                      <div className="tag-list">
+                                        {(r.orch.regions || []).map(reg => (
+                                          <span key={reg} className="tag region" title={`${allRegionDetails[reg]?.city || ''} ${allRegionDetails[reg]?.country || ''}`}>{reg.toUpperCase()}</span>
+                                        ))}
+                                      </div>
+                                    </td>
+                                  </tr>
+                                ))}
                               </tbody>
                             </table>
                           </div>
                         </>
-                      )}
+                        );
+                      })()}
 
-                      {filteredOrchs.some(o => o.capabilities_prices && o.capabilities_prices.length > 0) && (
+                      {filteredOrchs.some(o => o.capabilities_prices && o.capabilities_prices.length > 0) && (() => {
+                        // Flatten price rows for sorting
+                        interface PriceRow { orch: Orchestrator; price: CapabilityPrice }
+                        const priceRows: PriceRow[] = [];
+                        for (const orch of filteredOrchs) {
+                          for (const price of orch.capabilities_prices ?? []) {
+                            priceRows.push({ orch, price });
+                          }
+                        }
+                        const sorted = applySort(priceRows, (r: PriceRow) => {
+                          const s = getSort('prices');
+                          switch (s.column) {
+                            case 'address': return r.orch.address;
+                            case 'capability': return activeGateway.capabilities_names?.[r.price.capability.toString()] ?? `ID:${r.price.capability}`;
+                            case 'constraint': return r.price.constraint;
+                            case 'price': return r.price.pricePerUnit;
+                            case 'pixels': return r.price.pixelsPerUnit;
+                            default: return r.orch.address;
+                          }
+                        }, getSort('prices').direction);
+                        return (
                         <>
                           <h3>Capability Prices</h3>
                           <div className="table-wrapper">
                             <table className="data-table price-table">
                               <thead>
-                                <tr><th>Address</th><th>Capability</th><th>Constraint</th><th>Price Per Unit</th><th>Pixels Per Unit</th></tr>
+                                <tr>
+                                  <SortableHeader label="Address" sortKey="address" sortState={getSort('prices')} onSort={(k) => handleSort('prices', k)} />
+                                  <SortableHeader label="Capability" sortKey="capability" sortState={getSort('prices')} onSort={(k) => handleSort('prices', k)} />
+                                  <SortableHeader label="Constraint" sortKey="constraint" sortState={getSort('prices')} onSort={(k) => handleSort('prices', k)} />
+                                  <SortableHeader label="Price Per Unit" sortKey="price" sortState={getSort('prices')} onSort={(k) => handleSort('prices', k)} />
+                                  <SortableHeader label="Pixels Per Unit" sortKey="pixels" sortState={getSort('prices')} onSort={(k) => handleSort('prices', k)} />
+                                </tr>
                               </thead>
                               <tbody>
-                                {filteredOrchs.map((orch, oi) =>
-                                  (orch.capabilities_prices ?? []).map((price, pi) => (
-                                    <tr key={`${oi}-${pi}`}>
-                                      <td className="mono small" title={orch.address}>
-                                        {orch.address.slice(0, 8)}...{orch.address.slice(-6)}
-                                      </td>
-                                      <td>{activeGateway.capabilities_names?.[price.capability.toString()] ?? `ID:${price.capability}`}</td>
-                                      <td className="mono small">{price.constraint}</td>
-                                      <td className="mono">{price.pricePerUnit.toLocaleString()}</td>
-                                      <td className="mono">{price.pixelsPerUnit.toLocaleString()}</td>
-                                    </tr>
-                                  ))
-                                )}
+                                {sorted.map((r, ri) => (
+                                  <tr key={ri}>
+                                    <td className="mono small" title={r.orch.address}>
+                                      {r.orch.address.slice(0, 8)}...{r.orch.address.slice(-6)}
+                                    </td>
+                                    <td>{activeGateway.capabilities_names?.[r.price.capability.toString()] ?? `ID:${r.price.capability}`}</td>
+                                    <td className="mono small">{r.price.constraint}</td>
+                                    <td className="mono">{r.price.pricePerUnit.toLocaleString()}</td>
+                                    <td className="mono">{r.price.pixelsPerUnit.toLocaleString()}</td>
+                                  </tr>
+                                ))}
                               </tbody>
                             </table>
                           </div>
                         </>
-                      )}
+                        );
+                      })()}
 
                       {(() => {
                         const caps = extractCapabilities(filteredOrchs, activeGateway.capabilities_names || {}, [HEVC_ENCODE_CAP]);
