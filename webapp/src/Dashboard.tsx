@@ -420,13 +420,6 @@ export default function Dashboard() {
       <header>
         <h1>Livepeer Network Capabilities</h1>
         <div className="header-actions">
-          <input
-            type="text"
-            className="search-input"
-            placeholder="Search (address, URI, GPU, model, pipeline, region)..."
-            value={searchText}
-            onChange={e => setSearchText(e.target.value)}
-          />
           <button onClick={fetchData} disabled={loading}>
             {loading ? 'Refreshing...' : 'Refresh'}
           </button>
@@ -437,6 +430,29 @@ export default function Dashboard() {
           )}
         </div>
       </header>
+
+      {/* Search Bar */}
+      <div className="search-bar">
+        <svg className="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="11" cy="11" r="8"/>
+          <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+        </svg>
+        <input
+          type="text"
+          className="search-input"
+          placeholder="Search address, URI, GPU, model, pipeline, region..."
+          value={searchText}
+          onChange={e => setSearchText(e.target.value)}
+        />
+        {searchText && (
+          <button className="search-clear" onClick={() => setSearchText('')} title="Clear search">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="14" height="14">
+              <line x1="18" y1="6" x2="6" y2="18"/>
+              <line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
+        )}
+      </div>
 
       {/* Region Filter */}
       <section className="region-filter">
