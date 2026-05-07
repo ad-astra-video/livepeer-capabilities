@@ -169,6 +169,31 @@ async def vultr_regions(user: User = Depends(get_current_user)):
 def list_instances(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     return db.query(Instance).all()
 
+@app.get("/api/instances/health")
+def instance_health(db: Session = Depends(get_db)):
+    """Health overview: per-region heartbeat status of active/installing instances."""
+    cutoff = datetime.utcnow() - timedelta(minutes=STALE_THRESHOLD_MINUTES)
+    instances = db.query(Instance).filter(
+        Instance.status.in_(["installing", "active"])
+    ).all()
+
+    result = {}
+    for inst in instances:
+        region = inst.region_id
+        if region not in result:
+            result[region] = {
+                "region_id": region,
+                "last_heartbeat": inst.last_seen_at.isoformat() if inst.last_seen_at else None,
+                "is_stale": inst.last_seen_at is None or inst.last_seen_at < cutoff,
+            }
+        else:
+            # Multiple instances in same region — use the most recent heartbeat
+            if inst.last_seen_at and (not result[region]["last_heartbeat"] or inst.last_seen_at > datetime.fromisoformat(result[region]["last_heartbeat"])):
+                result[region]["last_heartbeat"] = inst.last_seen_at.isoformat()
+                result[region]["is_stale"] = inst.last_seen_at >= cutoff
+
+    return {"health": list(result.values())}
+
 @app.post("/api/instances")
 async def create_instance(req: dict, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     region_id = req.get("region_id")
