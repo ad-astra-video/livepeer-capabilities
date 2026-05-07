@@ -577,8 +577,8 @@ async def sweep_stale_instances():
         ).all()
 
         # Also catch instances still in 'installing' with no heartbeat at all
-        # (cloud-init never reported in) — treat anything >30 min old as stuck
-        installing_cutoff = datetime.utcnow() - timedelta(minutes=30)
+        # (cloud-init never reported in) — use same stale threshold
+        installing_cutoff = datetime.utcnow() - timedelta(minutes=STALE_THRESHOLD_MINUTES)
         silent_installing = db.query(Instance).filter(
             Instance.status == "installing",
             Instance.last_seen_at == None,
