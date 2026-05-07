@@ -7,7 +7,7 @@ from fastapi import Response
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from database import get_db, User, Region, Instance, CapabilityData, JobRun, SessionLocal, InstanceStatus, WorkerLog
 from auth import (
@@ -561,6 +561,59 @@ async def complete_instance(instance_id: str, req: dict, db: Session = Depends(g
 
     return {"ok": True}
 
+
+# ─── Sweep stale instances ───
+STALE_THRESHOLD_MINUTES = 15
+
+async def sweep_stale_instances():
+    """Background task: find active/installing instances silent for >15 min and destroy them."""
+    db = SessionLocal()
+    try:
+        cutoff = datetime.utcnow() - timedelta(minutes=STALE_THRESHOLD_MINUTES)
+        stale = db.query(Instance).filter(
+            Instance.status.in_(["installing", "active"]),
+            Instance.last_seen_at != None,
+            Instance.last_seen_at < cutoff
+        ).all()
+
+        # Also catch instances still in 'installing' with no heartbeat at all
+        # (cloud-init never reported in) — treat anything >30 min old as stuck
+        installing_cutoff = datetime.utcnow() - timedelta(minutes=30)
+        silent_installing = db.query(Instance).filter(
+            Instance.status == "installing",
+            Instance.last_seen_at == None,
+            Instance.created_at < installing_cutoff
+        ).all()
+
+        stale.extend(silent_installing)
+
+        if not stale:
+            return
+
+        print(f"SWEEP: found {len(stale)} stale instance(s)")
+        for instance in stale:
+            reason = "no heartbeat" if instance.last_seen_at else "never reported in"
+            print(f"SWEEP: destroying {instance.vultr_instance_id} ({instance.label}) - {reason} "
+                  f"(last_seen={instance.last_seen_at}, created={instance.created_at})")
+            instance.status = "error"
+            try:
+                await vultr.delete_instance(instance.vultr_instance_id)
+                print(f"SWEEP: {instance.vultr_instance_id} destroyed")
+            except Exception as e:
+                print(f"SWEEP: Vultr delete failed for {instance.vultr_instance_id}: {e}")
+        db.commit()
+    except Exception as e:
+        print(f"SWEEP error: {e}")
+        db.rollback()
+    finally:
+        db.close()
+
+
+def sweep_job():
+    import asyncio
+    asyncio.run(sweep_stale_instances())
+
+
 # ─── Scheduled Jobs ───
 from apscheduler.schedulers.background import BackgroundScheduler
 
@@ -615,6 +668,7 @@ def spawn_job():
     asyncio.run(spawn_region_workers())
 
 scheduler.add_job(spawn_job, 'interval', minutes=30, id='spawn_workers', replace_existing=True)
+scheduler.add_job(sweep_job, 'interval', minutes=5, id='sweep_stale_instances', replace_existing=True)
 scheduler.start()
 
 @app.get("/api/jobs")
@@ -625,6 +679,12 @@ def list_jobs(db: Session = Depends(get_db), user: User = Depends(get_current_us
 def trigger_jobs(user: User = Depends(get_current_user)):
     spawn_job()
     return {"ok": True, "message": "Worker spawn triggered"}
+
+@app.post("/api/instances/sweep")
+async def trigger_sweep(user: User = Depends(get_current_user)):
+    """Manually trigger sweep of stale instances."""
+    await sweep_stale_instances()
+    return {"ok": True, "message": "Sweep completed"}
 
 # ─── Health ───
 @app.get("/api/health")
