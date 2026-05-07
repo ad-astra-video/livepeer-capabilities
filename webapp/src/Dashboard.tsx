@@ -801,7 +801,7 @@ export default function Dashboard() {
         <div className="card">
           <h3>GPU Transcoders</h3>
           <div className="card-value">{totalHEVC}</div>
-          <div className="card-detail">total GPUs with HEVC encode capacity</div>
+          <div className="card-detail">total Transcoders with HEVC encode capacity</div>
         </div>
       </section>
 
