@@ -591,36 +591,24 @@ async def complete_instance(instance_id: str, req: dict, db: Session = Depends(g
 STALE_THRESHOLD_MINUTES = 15
 
 async def sweep_stale_instances():
-    """Background task: find active/installing instances silent for >15 min and destroy them."""
+    """Background task: destroy any active/installing instance that has been up for >15 min."""
     db = SessionLocal()
     try:
         cutoff = datetime.utcnow() - timedelta(minutes=STALE_THRESHOLD_MINUTES)
         stale = db.query(Instance).filter(
             Instance.status.in_(["installing", "active"]),
-            Instance.last_seen_at != None,
-            Instance.last_seen_at < cutoff
+            Instance.created_at < cutoff
         ).all()
-
-        # Also catch instances still in 'installing' with no heartbeat at all
-        # (cloud-init never reported in) — use same stale threshold
-        installing_cutoff = datetime.utcnow() - timedelta(minutes=STALE_THRESHOLD_MINUTES)
-        silent_installing = db.query(Instance).filter(
-            Instance.status == "installing",
-            Instance.last_seen_at == None,
-            Instance.created_at < installing_cutoff
-        ).all()
-
-        stale.extend(silent_installing)
 
         if not stale:
             return
 
-        print(f"SWEEP: found {len(stale)} stale instance(s)")
+        print(f"SWEEP: found {len(stale)} instance(s) up for >{STALE_THRESHOLD_MINUTES} min")
         for instance in stale:
-            reason = "no heartbeat" if instance.last_seen_at else "never reported in"
-            print(f"SWEEP: destroying {instance.vultr_instance_id} ({instance.label}) - {reason} "
-                  f"(last_seen={instance.last_seen_at}, created={instance.created_at})")
-            instance.status = "error"
+            uptime = datetime.utcnow() - instance.created_at
+            print(f"SWEEP: destroying {instance.vultr_instance_id} ({instance.label}) - uptime {uptime} "
+                  f"(created_at={instance.created_at})")
+            instance.status = "destroyed"
             try:
                 await vultr.delete_instance(instance.vultr_instance_id)
                 print(f"SWEEP: {instance.vultr_instance_id} destroyed")
